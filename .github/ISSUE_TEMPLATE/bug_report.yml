@@ -1,0 +1,50 @@
+name: Bug Report
+description: Something not working right? Let us know.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Fill in what you can — any detail helps.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem. What did you expect to happen vs what actually happened?
+      placeholder: "e.g. When I load a set, my attributes don't change..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce the issue? Skip this if it's hard to explain.
+      placeholder: |
+        1. Open character sheet
+        2. Click "Sets" tab
+        3. Load a saved set
+        4. ...
+
+  - type: input
+    id: mod-version
+    attributes:
+      label: Mod version
+      description: Check your BepInEx log or the Nexus download page.
+      placeholder: "e.g. 2.0.0"
+
+  - type: input
+    id: other-mods
+    attributes:
+      label: Other mods installed
+      description: List any other mods you're using (especially Unlimited Origin Potion or similar).
+      placeholder: "e.g. Unlimited Origin Potion, Quick Save"
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log output (optional)
+      description: |
+        If you can, paste the relevant section from `BepInEx/LogOutput.log`. Look for lines containing `[GearSetsMod]`.
+      render: text
