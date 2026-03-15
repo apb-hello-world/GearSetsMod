@@ -127,118 +127,169 @@ namespace GearSetsMod.Patches
             if (_setsTabType == null) return;
             try
             {
-                var tabsController = __instance.TabsController;
-                var sheetTabs = tabsController as CharacterSheetTabs;
+                var sheetTabs = __instance.TabsController as CharacterSheetTabs;
                 if (sheetTabs == null) { _log.LogError("[GearSets] Could not get CharacterSheetTabs!"); return; }
 
-                var tabsBaseType = typeof(CharacterSheetTabs).BaseType;
-                var buttonsField = tabsBaseType != null ? tabsBaseType.GetField("_buttons", BindingFlags.Instance | BindingFlags.NonPublic) : null;
+                var buttonsField = FindButtonsField();
                 if (buttonsField == null) { _log.LogError("[GearSets] Could not find _buttons field!"); return; }
 
-                var buttonsRaw = buttonsField.GetValue(sheetTabs);
-                var buttons = buttonsRaw as Array;
+                var buttons = buttonsField.GetValue(sheetTabs) as Array;
                 if (buttons == null || buttons.Length == 0) { _log.LogError("[GearSets] _buttons null or empty!"); return; }
 
-                // Check if already exists
-                for (int i = 0; i < buttons.Length; i++)
-                {
-                    var btn = buttons.GetValue(i);
-                    if (btn != null && ((Component)btn).gameObject.name == "SetsTabButton") { ((Component)btn).gameObject.SetActive(true); return; }
-                }
+                if (TryReuseExistingButton(buttons, buttonsField, sheetTabs))
+                    return;
 
-                if (_setsButtonInstance != null)
-                {
-                    _setsButtonInstance.SetActive(true);
-                    var comp = _setsButtonInstance.GetComponent<VCCharacterSheetTabButton>();
-                    if (comp != null)
-                    {
-                        var arr = Array.CreateInstance(buttonsField.FieldType.GetElementType(), buttons.Length + 1);
-                        Array.Copy(buttons, arr, buttons.Length);
-                        arr.SetValue(comp, buttons.Length);
-                        buttonsField.SetValue(sheetTabs, arr);
-                        return;
-                    }
-                    _setsButtonInstance = null;
-                }
+                var tabBtnComp = CloneTemplateButton(buttons);
+                if (tabBtnComp == null) return;
 
-                // Clone last button as template
-                var template = buttons.GetValue(buttons.Length - 1);
-                if (template == null) { _log.LogError("[GearSets] Template button null!"); return; }
-
-                _setsButtonInstance = UnityEngine.Object.Instantiate(((Component)template).gameObject, ((Component)template).transform.parent);
-                _setsButtonInstance.name = "SetsTabButton";
-
-                var tabBtnComp = _setsButtonInstance.GetComponent<VCCharacterSheetTabButton>();
-                if (tabBtnComp == null) { _log.LogError("[GearSets] Clone missing VCCharacterSheetTabButton!"); UnityEngine.Object.Destroy(_setsButtonInstance); _setsButtonInstance = null; return; }
-
-                // Set tabType via reflection on the RichEnumReference field
-                var tabTypeField = typeof(VCCharacterSheetTabButton).GetField("tabType", BindingFlags.Instance | BindingFlags.NonPublic);
-                if (tabTypeField != null)
-                {
-                    try
-                    {
-                        var richEnumRef = tabTypeField.GetValue(tabBtnComp);
-                        var enumProp = richEnumRef.GetType().GetProperty("Enum", BindingFlags.Instance | BindingFlags.Public);
-                        if (enumProp != null && enumProp.CanWrite) enumProp.SetValue(richEnumRef, _setsTabType);
-                        else
-                        {
-                            var ef = richEnumRef.GetType().GetField("_enum", BindingFlags.Instance | BindingFlags.NonPublic);
-                            if (ef != null) ef.SetValue(richEnumRef, _setsTabType);
-                        }
-                    }
-                    catch (Exception ex) { _log.LogWarning($"[GearSets] Could not set tabType field: {ex.Message}"); }
-                }
-
+                ConfigureTabType(tabBtnComp);
                 _setsButtonInstance.transform.SetAsLastSibling();
-
-                // Initialize button label via ButtonConfig
-                var headerTabBtnBase = typeof(VCCharacterSheetTabButton).BaseType;
-                var btnConfigField = headerTabBtnBase != null ? headerTabBtnBase.GetField("buttonConfig", BindingFlags.Instance | BindingFlags.NonPublic) : null;
-                if (btnConfigField != null)
-                {
-                    var config = btnConfigField.GetValue(tabBtnComp);
-                    if (config != null)
-                    {
-                        var initBtn = config.GetType().GetMethod("InitializeButton", BindingFlags.Instance | BindingFlags.Public);
-                        if (initBtn != null)
-                        {
-                            try { initBtn.Invoke(config, new object[] { null, "Sets", false }); _setsButtonConfig = config; }
-                            catch (Exception ex) { _log.LogWarning($"[GearSets] InitializeButton failed: {ex.Message}"); }
-                        }
-                    }
-                }
-
-                // Wire click handler via ARButton.OnClick event
-                _currentTabs = sheetTabs;
-                var vcTabBtnBase = headerTabBtnBase != null ? headerTabBtnBase.BaseType : null;
-                var buttonField = vcTabBtnBase != null ? vcTabBtnBase.GetField("button", BindingFlags.Instance | BindingFlags.Public) : null;
-                if (buttonField != null)
-                {
-                    var arButton = buttonField.GetValue(tabBtnComp);
-                    if (arButton != null)
-                    {
-                        var onClick = arButton.GetType().GetEvent("OnClick");
-                        if (onClick != null)
-                        {
-                            try
-                            {
-                                var handler = typeof(GearSetsTabPatch).GetMethod(nameof(OnSetsButtonClicked), BindingFlags.Static | BindingFlags.Public);
-                                onClick.AddEventHandler(arButton, Delegate.CreateDelegate(onClick.EventHandlerType, handler));
-                            }
-                            catch (Exception ex) { _log.LogWarning($"[GearSets] Could not wire OnClick: {ex.Message}"); }
-                        }
-                    }
-                }
-
-                // Add to buttons array
-                var finalArr = Array.CreateInstance(buttonsField.FieldType.GetElementType(), buttons.Length + 1);
-                Array.Copy(buttons, finalArr, buttons.Length);
-                finalArr.SetValue(tabBtnComp, buttons.Length);
-                buttonsField.SetValue(sheetTabs, finalArr);
+                InitializeButtonLabel(tabBtnComp);
+                WireClickHandler(tabBtnComp, sheetTabs);
+                AppendToButtonsArray(tabBtnComp, buttons, buttonsField, sheetTabs);
 
                 _log.LogInfo("[GearSets] Tab button injected successfully!");
             }
             catch (Exception ex) { _log.LogError($"[GearSets] Failed to inject button: {ex}"); }
+        }
+
+        private static FieldInfo FindButtonsField()
+        {
+            var tabsBaseType = typeof(CharacterSheetTabs).BaseType;
+            return tabsBaseType?.GetField("_buttons", BindingFlags.Instance | BindingFlags.NonPublic);
+        }
+
+        /// <summary>
+        /// If the button already exists in the array (re-open) or was cached, reuse it.
+        /// Returns true if reuse succeeded and no further work is needed.
+        /// </summary>
+        private static bool TryReuseExistingButton(Array buttons, FieldInfo buttonsField, CharacterSheetTabs sheetTabs)
+        {
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                var btn = buttons.GetValue(i);
+                if (btn != null && ((Component)btn).gameObject.name == "SetsTabButton")
+                {
+                    ((Component)btn).gameObject.SetActive(true);
+                    return true;
+                }
+            }
+
+            if (_setsButtonInstance != null)
+            {
+                _setsButtonInstance.SetActive(true);
+                var comp = _setsButtonInstance.GetComponent<VCCharacterSheetTabButton>();
+                if (comp != null)
+                {
+                    AppendToButtonsArray(comp, buttons, buttonsField, sheetTabs);
+                    return true;
+                }
+                _setsButtonInstance = null;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Clones the last tab button as a template for the Sets tab.
+        /// Returns the <see cref="VCCharacterSheetTabButton"/> component, or null on failure.
+        /// </summary>
+        private static VCCharacterSheetTabButton CloneTemplateButton(Array buttons)
+        {
+            var template = buttons.GetValue(buttons.Length - 1);
+            if (template == null) { _log.LogError("[GearSets] Template button null!"); return null; }
+
+            _setsButtonInstance = UnityEngine.Object.Instantiate(((Component)template).gameObject, ((Component)template).transform.parent);
+            _setsButtonInstance.name = "SetsTabButton";
+
+            var tabBtnComp = _setsButtonInstance.GetComponent<VCCharacterSheetTabButton>();
+            if (tabBtnComp == null)
+            {
+                _log.LogError("[GearSets] Clone missing VCCharacterSheetTabButton!");
+                UnityEngine.Object.Destroy(_setsButtonInstance);
+                _setsButtonInstance = null;
+            }
+
+            return tabBtnComp;
+        }
+
+        /// <summary>
+        /// Sets the tabType field on the cloned button to point to our custom <see cref="_setsTabType"/>.
+        /// </summary>
+        private static void ConfigureTabType(VCCharacterSheetTabButton tabBtnComp)
+        {
+            var tabTypeField = typeof(VCCharacterSheetTabButton).GetField("tabType", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (tabTypeField == null) return;
+
+            try
+            {
+                var richEnumRef = tabTypeField.GetValue(tabBtnComp);
+                var enumProp = richEnumRef.GetType().GetProperty("Enum", BindingFlags.Instance | BindingFlags.Public);
+                if (enumProp != null && enumProp.CanWrite)
+                    enumProp.SetValue(richEnumRef, _setsTabType);
+                else
+                {
+                    var ef = richEnumRef.GetType().GetField("_enum", BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (ef != null) ef.SetValue(richEnumRef, _setsTabType);
+                }
+            }
+            catch (Exception ex) { _log.LogWarning($"[GearSets] Could not set tabType field: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Initializes the button label text to "Sets" via ButtonConfig.InitializeButton.
+        /// </summary>
+        private static void InitializeButtonLabel(VCCharacterSheetTabButton tabBtnComp)
+        {
+            var headerTabBtnBase = typeof(VCCharacterSheetTabButton).BaseType;
+            var btnConfigField = headerTabBtnBase?.GetField("buttonConfig", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (btnConfigField == null) return;
+
+            var config = btnConfigField.GetValue(tabBtnComp);
+            if (config == null) return;
+
+            var initBtn = config.GetType().GetMethod("InitializeButton", BindingFlags.Instance | BindingFlags.Public);
+            if (initBtn == null) return;
+
+            try
+            {
+                initBtn.Invoke(config, new object[] { null, "Sets", false });
+                _setsButtonConfig = config;
+            }
+            catch (Exception ex) { _log.LogWarning($"[GearSets] InitializeButton failed: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Wires the ARButton.OnClick event to our <see cref="OnSetsButtonClicked"/> handler.
+        /// </summary>
+        private static void WireClickHandler(VCCharacterSheetTabButton tabBtnComp, CharacterSheetTabs sheetTabs)
+        {
+            _currentTabs = sheetTabs;
+            var headerTabBtnBase = typeof(VCCharacterSheetTabButton).BaseType;
+            var vcTabBtnBase = headerTabBtnBase?.BaseType;
+            var buttonField = vcTabBtnBase?.GetField("button", BindingFlags.Instance | BindingFlags.Public);
+            if (buttonField == null) return;
+
+            var arButton = buttonField.GetValue(tabBtnComp);
+            if (arButton == null) return;
+
+            var onClick = arButton.GetType().GetEvent("OnClick");
+            if (onClick == null) return;
+
+            try
+            {
+                var handler = typeof(GearSetsTabPatch).GetMethod(nameof(OnSetsButtonClicked), BindingFlags.Static | BindingFlags.Public);
+                onClick.AddEventHandler(arButton, Delegate.CreateDelegate(onClick.EventHandlerType, handler));
+            }
+            catch (Exception ex) { _log.LogWarning($"[GearSets] Could not wire OnClick: {ex.Message}"); }
+        }
+
+        private static void AppendToButtonsArray(VCCharacterSheetTabButton tabBtnComp, Array buttons, FieldInfo buttonsField, CharacterSheetTabs sheetTabs)
+        {
+            var arr = Array.CreateInstance(buttonsField.FieldType.GetElementType(), buttons.Length + 1);
+            Array.Copy(buttons, arr, buttons.Length);
+            arr.SetValue(tabBtnComp, buttons.Length);
+            buttonsField.SetValue(sheetTabs, arr);
         }
 
         public static void OnSetsButtonClicked()

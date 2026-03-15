@@ -47,7 +47,10 @@ namespace GearSetsMod.Core
                     var set = JsonWrapper.FromJson<GearSet>(json);
                     if (set != null) sets.Add(set);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[GearSetsMod] Failed to deserialize {file}: {ex.Message}");
+                }
             }
 
             return sets.OrderByDescending(s => s.CreatedAt).ToList();

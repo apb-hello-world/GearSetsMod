@@ -14,6 +14,11 @@
     <Compile Include="Core/SetManager.cs" />
     <Compile Include="Patches/GearSetsTabPatch.cs" />
     <Compile Include="UI/GearSetsUI.cs" />
+    <Compile Include="UI/VGearSetsUI.cs" />
+    <Compile Include="UI/NameInputDialog.cs" />
+    <Compile Include="Core/GearSetCapture.cs" />
+    <Compile Include="Core/GearSetApply.cs" />
+    <Compile Include="Core/SlotHelpers.cs" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="BepInEx"><HintPath>lib/BepInEx.dll</HintPath><Private>false</Private></Reference>

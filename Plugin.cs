@@ -6,20 +6,20 @@ using GearSetsMod.Patches;
 
 namespace GearSetsMod
 {
-    [BepInPlugin("com.gearsets.taintedgrail", "Gear & Skill Sets", "2.0.0")]
+    [BepInPlugin(PluginId, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
-        internal static Plugin Instance;
+        internal const string PluginId = "com.gearsets.taintedgrail";
+        internal const string PluginName = "Gear & Skill Sets";
+        internal const string PluginVersion = "2.0.0";
 
         private void Awake()
         {
-            Instance = this;
-
             SetManager.ConfigPath = Path.Combine(Paths.ConfigPath, "GearSets");
 
-            var harmony = new Harmony("com.gearsets.taintedgrail");
+            var harmony = new Harmony(PluginId);
             GearSetsTabPatch.Initialize(harmony, Logger);
-            Logger.LogInfo("Gear & Skill Sets v2.0.0 loaded!");
+            Logger.LogInfo($"{PluginName} v{PluginVersion} loaded!");
         }
     }
 }
