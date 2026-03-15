@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Package release zip
+        run: |
+          cd dist
+          zip GearSetsMod_${{ steps.version.outputs.VERSION }}.zip GearSetsMod.dll
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/GearSetsMod_${{ steps.version.outputs.VERSION }}.zip
+          generate_release_notes: false
+          body: |
+            ## GearSetsMod ${{ steps.version.outputs.VERSION }}
+
+            Download `GearSetsMod_${{ steps.version.outputs.VERSION }}.zip`, extract, and place `GearSetsMod.dll` in your `BepInEx/plugins` folder.

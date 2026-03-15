@@ -5,3 +5,12 @@ lib/
 *.user
 *.suo
 .vs/
+
+# AI tools
+.sisyphus*
+.opencode*
+.claude*
+.cursor*
+CLAUDE*
+.ai*
+*.md
