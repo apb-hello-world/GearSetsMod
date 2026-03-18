@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using Awaken.TG.Main.Character;
 using Awaken.TG.Main.Heroes;
@@ -172,8 +171,6 @@ namespace GearSetsMod.Core
                     if (subtrees.Count > 0)
                         set.TalentTrees[treeName] = subtrees;
                 }
-
-                Log.LogDebug($"[CaptureTalents] Captured {set.TalentLevels.Count} talent levels across {set.TalentTrees.Count} trees");
             }
             catch (Exception ex)
             {
@@ -196,7 +193,6 @@ namespace GearSetsMod.Core
                 try
                 {
                     set.HeroLevel = (int)hero.CharacterStats.Level.BaseValue;
-                    Log.LogDebug($"[CaptureRpgStats] Hero level: {set.HeroLevel}");
                 }
                 catch (Exception ex)
                 {
@@ -233,10 +229,9 @@ namespace GearSetsMod.Core
                             if (vp != null)
                             {
                                 var val = vp.GetValue(stat);
-                                if (val is float f) { set.RpgStats[name] = f; Log.LogDebug($"[CaptureRpgStats] {name} = {f} (via {valProp})"); break; }
-                                if (val is int i) { set.RpgStats[name] = i; Log.LogDebug($"[CaptureRpgStats] {name} = {i} (via {valProp})"); break; }
-                                if (val is double d) { set.RpgStats[name] = (float)d; Log.LogDebug($"[CaptureRpgStats] {name} = {d} (via {valProp})"); break; }
-                                Log.LogDebug($"[CaptureRpgStats] {name}.{valProp} type={val?.GetType().Name}, value={val}");
+                                if (val is float f) { set.RpgStats[name] = f; break; }
+                                if (val is int i) { set.RpgStats[name] = i; break; }
+                                if (val is double d) { set.RpgStats[name] = (float)d; break; }
                             }
                         }
 
@@ -250,7 +245,6 @@ namespace GearSetsMod.Core
                 }
 
                 set.Version = 2;
-                Log.LogDebug($"[CaptureRpgStats] Captured {set.RpgStats.Count} RPG stats (BaseValue): {string.Join(", ", set.RpgStats.Select(kv => $"{kv.Key}={kv.Value}"))}");
             }
             catch (Exception ex)
             {

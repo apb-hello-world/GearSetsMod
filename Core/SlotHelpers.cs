@@ -164,5 +164,24 @@ namespace GearSetsMod.Core
 
             return guid;
         }
+
+        /// <summary>
+        /// Returns true if the item template for the given GUID is a two-handed weapon.
+        /// Used to distinguish 2H weapons (same item in both hand slots) from
+        /// dual-wielding identical 1H weapons.
+        /// </summary>
+        public static bool IsItemTwoHanded(string guid)
+        {
+            if (string.IsNullOrEmpty(guid)) return false;
+            try
+            {
+                var template = TemplatesUtil.Load<ItemTemplate>(guid);
+                return template != null && template.IsTwoHanded;
+            }
+            catch (System.Exception)
+            {
+                return false;
+            }
+        }
     }
 }

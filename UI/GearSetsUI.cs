@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Awaken.TG.Main.Heroes;
 using Awaken.TG.Main.Heroes.CharacterSheet.Tabs;
+using Awaken.TG.Main.Heroes.Stats;
 using BepInEx.Logging;
 using GearSetsMod.Core;
 using UnityEngine;
@@ -41,6 +43,7 @@ namespace GearSetsMod.UI
             view.updateBtn.onClick.AddListener(OnUpdateClicked);
             view.loadBtn.onClick.AddListener(OnLoadClicked);
             view.deleteBtn.onClick.AddListener(OnDeleteClicked);
+            view.resetBtn.onClick.AddListener(OnResetBuildClicked);
 
             RefreshSetList();
             UpdateDetailPanel();
@@ -48,17 +51,14 @@ namespace GearSetsMod.UI
 
         private void RefreshSetList()
         {
-            Log.LogDebug($"[RefreshSetList] called. _view={_view != null}, setListContent={_view?.setListContent != null}");
             if (_view == null || _view.setListContent == null) return;
 
             var children = new List<GameObject>();
             foreach (Transform child in _view.setListContent)
                 children.Add(child.gameObject);
-            Log.LogDebug($"[RefreshSetList] destroying {children.Count} old entries");
             foreach (var child in children)
                 UnityEngine.Object.DestroyImmediate(child);
 
-            Log.LogDebug($"[RefreshSetList] ConfigPath={SetManager.ConfigPath}");
             try
             {
                 _allSets = SetManager.GetAllSets();
@@ -70,16 +70,13 @@ namespace GearSetsMod.UI
                 _allSets = new List<GearSet>();
             }
 
-            Log.LogDebug($"[RefreshSetList] found {_allSets.Count} sets");
             foreach (var set in _allSets)
             {
-                Log.LogDebug($"[RefreshSetList] creating entry for: {set.Name}");
                 var btn = _view.CreateSetListEntry(set.Name);
                 var captured = set;
                 btn.onClick.AddListener(() => OnSetSelected(captured));
             }
 
-            // Force layout rebuild after adding entries
             LayoutRebuilder.ForceRebuildLayoutImmediate(_view.setListContent.GetComponent<RectTransform>());
 
             if (_selectedSet != null)
@@ -173,10 +170,37 @@ namespace GearSetsMod.UI
             foreach (var group in loadoutGroups)
             {
                 _view.AddSectionHeader($"── Weapon {group.Key + 1} ──", parent);
+
+                // Build slot→GUID lookup for 2H detection
+                var slotGuids = new Dictionary<string, string>();
+                foreach (var entry in group.Value)
+                    slotGuids[entry.Key] = entry.Value;
+
                 foreach (var entry in group.Value)
                 {
                     if (string.IsNullOrEmpty(entry.Value)) continue;
-                    _view.AddTableRow(SlotHelpers.PrettySlotName(entry.Key), SlotHelpers.ResolveItemName(entry.Value), parent);
+
+                    bool is2H = false;
+                    if (entry.Key == "MainHand" || entry.Key == "AdditionalMainHand")
+                    {
+                        string offKey = entry.Key == "MainHand" ? "OffHand" : "AdditionalOffHand";
+                        if (slotGuids.TryGetValue(offKey, out var offGuid) && offGuid == entry.Value)
+                            is2H = SlotHelpers.IsItemTwoHanded(entry.Value);
+                    }
+
+                    // Skip redundant OffHand row for 2H weapons
+                    if (entry.Key == "OffHand" || entry.Key == "AdditionalOffHand")
+                    {
+                        string mainKey = entry.Key == "OffHand" ? "MainHand" : "AdditionalMainHand";
+                        if (slotGuids.TryGetValue(mainKey, out var mainGuid) && mainGuid == entry.Value
+                            && SlotHelpers.IsItemTwoHanded(entry.Value))
+                            continue;
+                    }
+
+                    string slotLabel = SlotHelpers.PrettySlotName(entry.Key);
+                    if (is2H) slotLabel += " (2H)";
+
+                    _view.AddTableRow(slotLabel, SlotHelpers.ResolveItemName(entry.Value), parent);
                 }
                 _view.AddSpacer(parent);
             }
@@ -311,6 +335,52 @@ namespace GearSetsMod.UI
             catch (Exception ex)
             {
                 ShowStatus("Delete failed: " + ex.Message);
+            }
+        }
+
+        private void OnResetBuildClicked()
+        {
+            if (_view.nameDialog == null) return;
+            _view.nameDialog.OpenConfirm(
+                "Reset ALL skills, talents, and attributes?\nThis replicates the Origin Potion effect (no potion consumed).",
+                DoResetBuild);
+        }
+
+        private void DoResetBuild()
+        {
+            try
+            {
+                var hero = Hero.Current;
+                if (hero == null)
+                {
+                    ShowStatus("Reset failed — no hero available.");
+                    return;
+                }
+
+                hero.Talents?.Reset();
+
+                var rpgStats = hero.HeroRPGStats?.GetHeroRPGStats();
+                if (rpgStats != null)
+                {
+                    foreach (var stat in rpgStats)
+                    {
+                        int refund = stat.BaseInt - 1;
+                        if (refund > 0)
+                            hero.Development.BaseStatPoints.IncreaseBy(refund);
+                        stat.SetTo(1f);
+                    }
+                }
+
+                // Do NOT call RecalculateStats — it reconstructs stats from stale wrapper
+                // diffs, overwriting the refunded points. The Origin Potion doesn't
+                // recalculate either; SetTo/IncreaseBy update live objects directly.
+
+                ShowStatus("Build reset — all talents and attributes refunded.");
+            }
+            catch (Exception ex)
+            {
+                Log.LogError($"[ResetBuild] Failed: {ex}");
+                ShowStatus("Reset failed: " + ex.Message);
             }
         }
 
