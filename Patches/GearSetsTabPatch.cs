@@ -23,6 +23,13 @@ namespace GearSetsMod.Patches
 
         public static CharacterSheetTabType SetsTabType => _setsTabType;
 
+        // Harmony prefix: return false = skip ToggleCharacterSheet while dialog is open
+        // Prevents keys like 'i' from closing the inventory while typing a set name
+        public static bool ToggleCharacterSheet_Prefix()
+        {
+            return !SuppressInput;
+        }
+
         // Harmony prefix: return false = skip original OnHandle (suppresses tab-switching keys while dialog is open)
         public static bool OnHandle_Prefix()
         {
@@ -100,6 +107,14 @@ namespace GearSetsMod.Patches
                 var onHandleMethod = typeof(CharacterSheetTabs).GetMethod("OnHandle", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
                 if (onHandleMethod != null)
                     _harmony.Patch(onHandleMethod, prefix: new HarmonyMethod(typeof(GearSetsTabPatch).GetMethod(nameof(OnHandle_Prefix), BindingFlags.Static | BindingFlags.Public)));
+
+                // Step 9: Patch ToggleCharacterSheet to prevent 'i' key from closing the sheet while typing
+                var toggleMethod = typeof(CharacterSheetUI).GetMethod("ToggleCharacterSheet", BindingFlags.Static | BindingFlags.Public, null, Type.EmptyTypes, null);
+                if (toggleMethod != null)
+                    _harmony.Patch(toggleMethod, prefix: new HarmonyMethod(typeof(GearSetsTabPatch).GetMethod(nameof(ToggleCharacterSheet_Prefix), BindingFlags.Static | BindingFlags.Public)));
+                var toggleOverload = typeof(CharacterSheetUI).GetMethod("ToggleCharacterSheet", BindingFlags.Static | BindingFlags.Public, null, new[] { typeof(CharacterSheetTabType), typeof(bool), typeof(CharacterSheetTabType[]) }, null);
+                if (toggleOverload != null)
+                    _harmony.Patch(toggleOverload, prefix: new HarmonyMethod(typeof(GearSetsTabPatch).GetMethod(nameof(ToggleCharacterSheet_Prefix), BindingFlags.Static | BindingFlags.Public)));
 
                 _initialized = true;
                 _log.LogInfo("[GearSets] Tab type registered successfully!");

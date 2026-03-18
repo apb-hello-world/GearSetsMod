@@ -65,6 +65,13 @@ namespace GearSetsMod.Core
                 ReleaseStorage(storage, storageRequested);
             }
 
+            // Apply talents FIRST, then RPG stats. The talent currency stat and RPG stat
+            // are the SAME Stat object (e.g. Dexterity stat = DEX talent point pool).
+            // Reset(withRefund) refunds invested talent points back to the stat,
+            // and AcquireNextTemporaryLevel spends from it. If ApplyRpgStats ran first,
+            // SetTo() would overwrite the refunded points before talents could re-acquire.
+            // After talents are re-invested, the stat naturally has (total - invested)
+            // remaining, which matches the BaseValue captured at save time.
             ApplyTalents(hero, set);
             ApplyRpgStats(hero, set);
             RecalculateStats(hero);
@@ -356,7 +363,7 @@ namespace GearSetsMod.Core
 
             try
             {
-                // Phase 1: Reset all talents
+                // Phase 1: Reset all talents (refunding points to currency stats)
                 int resetCount = 0;
                 foreach (TalentTable table in heroTalents.Elements<TalentTable>())
                 {
@@ -371,7 +378,64 @@ namespace GearSetsMod.Core
                 }
                 Log.LogDebug($"[ApplyTalents] Reset {resetCount} talents");
 
-                // Phase 2: Apply saved levels (ordered by tree level requirement)
+                // Compute total talent levels demanded by the saved set
+                int totalDemanded = 0;
+                foreach (var kvp in set.TalentLevels)
+                    totalDemanded += kvp.Value;
+                Log.LogDebug($"[ApplyTalents] Total talent levels demanded by saved set: {totalDemanded}");
+
+                // Phase 2: Ensure each tree's currency stat has enough points, then
+                // re-acquire saved levels ordered by tree-level requirement.
+                //
+                // The currency stat is shared across multiple trees (e.g. Str/End/Dex/
+                // Pra/Per/Spi all use one pool). After a Reset(withRefund), the pool
+                // contains however many points were refunded — which may not match
+                // what the saved set needs (e.g. previous set invested fewer points,
+                // or ApplyRpgStats from a prior load set the stat to a different value).
+                //
+                // Fix: before acquiring, compute the total demand across ALL trees that
+                // share a given currency stat and SetTo that value if the current pool
+                // is too small. After talents are re-invested, ApplyRpgStats will set
+                // the stat to the correct saved BaseValue (post-investment).
+                //
+                // Build a map of currency stat → total demand for that stat
+                var currencyDemand = new Dictionary<Stat, int>();
+                foreach (TalentTable table in heroTalents.Elements<TalentTable>())
+                {
+                    int treeDemand = 0;
+                    Stat treeCurrency = null;
+                    foreach (Talent talent in table.talents)
+                    {
+                        string talentName = talent.Template?.name ?? "";
+                        if (string.IsNullOrEmpty(talentName)) continue;
+                        if (!set.TalentLevels.TryGetValue(talentName, out int targetLevel)) continue;
+                        if (targetLevel <= 0) continue;
+                        treeDemand += targetLevel;
+                        if (treeCurrency == null)
+                        {
+                            try { treeCurrency = talent.CurrencyStat; } catch { }
+                        }
+                    }
+                    if (treeCurrency != null && treeDemand > 0)
+                    {
+                        if (currencyDemand.ContainsKey(treeCurrency))
+                            currencyDemand[treeCurrency] += treeDemand;
+                        else
+                            currencyDemand[treeCurrency] = treeDemand;
+                    }
+                }
+
+                // Ensure each currency stat has enough points for the total demand
+                foreach (var cd in currencyDemand)
+                {
+                    float currentBase = cd.Key.BaseValue;
+                    if (currentBase < cd.Value)
+                    {
+                        Log.LogDebug($"[ApplyTalents] Currency stat BaseValue={currentBase} < demand={cd.Value}, setting to {cd.Value}");
+                        cd.Key.SetTo(cd.Value, false, null);
+                    }
+                }
+
                 int appliedCount = 0;
                 int failedCount = 0;
                 foreach (TalentTable table in heroTalents.Elements<TalentTable>())
@@ -387,28 +451,46 @@ namespace GearSetsMod.Core
                     }
 
                     toApply.Sort((a, b) => a.talent.RequiredTreeLevelToUnlock.CompareTo(b.talent.RequiredTreeLevelToUnlock));
-                    Log.LogDebug($"[ApplyTalents] Tree '{table.TreeTemplate?.name}': {toApply.Count} talents to restore");
 
+                    if (toApply.Count > 0)
+                    {
+                        int treeDemand = 0;
+                        foreach (var (_, _, t) in toApply) treeDemand += t;
+                        Stat treeCurrency = null;
+                        try { treeCurrency = toApply[0].talent.CurrencyStat; } catch { }
+                        Log.LogDebug($"[ApplyTalents] Tree '{table.TreeTemplate?.name}': {toApply.Count} talents, demand={treeDemand}, currency={treeCurrency?.BaseValue}");
+                    }
+
+                    bool treeHasAcquiredLevels = false;
                     foreach (var (talent, talentName, targetLevel) in toApply)
                     {
-                        bool anyFailed = false;
+                        bool talentFailed = false;
                         for (int i = 0; i < targetLevel; i++)
                         {
-                            bool acquired = talent.AcquireNextTemporaryLevel();
-                            if (!acquired)
+                            if (!talent.CanAcquireNextLevel(out Talent.AcquiringProblem problem))
                             {
-                                Log.LogWarning($"[ApplyTalents] FAILED level {i+1}/{targetLevel} for '{talentName}' (EstLevel={talent.EstimatedLevel}, TreeLevel={table.CurrentTreeLevel}, Required={talent.RequiredTreeLevelToUnlock})");
-                                anyFailed = true;
+                                Log.LogWarning($"[ApplyTalents] FAILED level {i+1}/{targetLevel} for '{talentName}': {problem} " +
+                                    $"(EstLevel={talent.EstimatedLevel}, TreeLevel={table.CurrentTreeLevel}, " +
+                                    $"Required={talent.RequiredTreeLevelToUnlock}, Currency={talent.CurrencyStat.BaseValue})");
+                                talentFailed = true;
                                 failedCount++;
                                 break;
                             }
+                            talent.AcquireNextTemporaryLevel();
+                            treeHasAcquiredLevels = true;
                         }
-                        talent.ApplyTemporaryLevels();
-                        if (!anyFailed)
+                        if (!talentFailed)
                         {
                             appliedCount++;
-                            Log.LogDebug($"[ApplyTalents] Applied {targetLevel} levels to '{talentName}'");
+                            Log.LogDebug($"[ApplyTalents] Acquired {targetLevel} temporary level(s) for '{talentName}'");
                         }
+                    }
+
+                    // Commit all temporary levels for this tree in one batch
+                    if (treeHasAcquiredLevels)
+                    {
+                        table.ApplyTemporaryLevels();
+                        Log.LogDebug($"[ApplyTalents] Committed temporary levels for tree '{table.TreeTemplate?.name}'");
                     }
                 }
 

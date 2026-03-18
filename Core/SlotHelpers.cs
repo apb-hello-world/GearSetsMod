@@ -3,6 +3,7 @@ using System.Linq;
 using System.Reflection;
 using Awaken.TG.Main.Heroes;
 using Awaken.TG.Main.Heroes.Items;
+using Awaken.TG.Main.Templates;
 
 namespace GearSetsMod.Core
 {
@@ -137,18 +138,28 @@ namespace GearSetsMod.Core
 
             try
             {
+                // First try: look up item in hero's inventory (includes equipped items)
                 var hero = Hero.Current;
-                if (hero == null) return guid;
+                if (hero != null)
+                {
+                    var item = hero.HeroItems?.Items
+                        .FirstOrDefault(i => i.Template?.GUID == guid);
 
-                var item = hero.HeroItems?.Items
-                    .FirstOrDefault(i => i.Template?.GUID == guid);
+                    if (item != null) return item.DisplayName;
+                }
 
-                if (item != null) return item.DisplayName;
+                // Second try: resolve via template registry (works for any valid GUID,
+                // even if the item isn't in inventory — e.g. it's in stash or unowned)
+                var template = TemplatesUtil.Load<ItemTemplate>(guid);
+                if (template != null)
+                {
+                    string name = template.ItemName;
+                    if (!string.IsNullOrEmpty(name)) return name;
+                }
             }
-            catch (System.Exception ex)
+            catch (System.Exception)
             {
                 // Best-effort lookup — fall through to return the raw GUID
-                var _ = ex;
             }
 
             return guid;
