@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Awaken.TG.Main.Heroes;
 using Awaken.TG.Main.Heroes.CharacterSheet.Tabs;
+using Awaken.TG.Main.Heroes.Development.Talents;
 using Awaken.TG.Main.Heroes.Stats;
 using BepInEx.Logging;
 using GearSetsMod.Core;
@@ -44,6 +46,7 @@ namespace GearSetsMod.UI
             view.loadBtn.onClick.AddListener(OnLoadClicked);
             view.deleteBtn.onClick.AddListener(OnDeleteClicked);
             view.resetBtn.onClick.AddListener(OnResetBuildClicked);
+            view.fixPointsBtn.onClick.AddListener(OnFixPointsClicked);
 
             RefreshSetList();
             UpdateDetailPanel();
@@ -381,6 +384,298 @@ namespace GearSetsMod.UI
             {
                 Log.LogError($"[ResetBuild] Failed: {ex}");
                 ShowStatus("Reset failed: " + ex.Message);
+            }
+        }
+
+        // Currency stats on hero.CharacterStats
+        private static readonly string[] CharacterPointStatNames = new[]
+        {
+            "TalentPoints",
+            "CatalystTalentPoints",
+            "SarrasMageTalentPoints",
+            "SarrasRogueTalentPoints",
+            "SarrasWarriorTalentPoints"
+        };
+
+        // Currency stats on hero.HeroStats (different stat container)
+        private static readonly string[] HeroPointStatNames = new[]
+        {
+            "WyrdMemoryShards"
+        };
+
+        private static readonly Dictionary<string, string> PointStatLabels = new Dictionary<string, string>
+        {
+            { "BaseStatPoints", "Attribute Points" },
+            { "TalentPoints", "Talent Points" },
+            { "CatalystTalentPoints", "Sarras Catalyst" },
+            { "SarrasMageTalentPoints", "Sarras Mage" },
+            { "SarrasRogueTalentPoints", "Sarras Rogue" },
+            { "SarrasWarriorTalentPoints", "Sarras Warrior" },
+            { "WyrdMemoryShards", "King's Soul" },
+        };
+
+        private void OnFixPointsClicked()
+        {
+            if (_view.nameDialog == null) return;
+
+            var hero = Hero.Current;
+            if (hero == null)
+            {
+                ShowStatus("No hero available.");
+                return;
+            }
+
+            var entries = new List<NameInputDialog.PointEntry>();
+
+            // BaseStatPoints lives on hero.Development
+            try
+            {
+                var bsp = hero.Development?.BaseStatPoints;
+                if (bsp != null)
+                {
+                    // Total attribute budget = free points + points invested in RPG stats
+                    float invested = 0f;
+                    var rpgStats = hero.HeroRPGStats?.GetHeroRPGStats();
+                    if (rpgStats != null)
+                    {
+                        foreach (var stat in rpgStats)
+                            invested += stat.BaseInt - 1; // each starts at 1
+                    }
+                    float total = bsp.BaseValue + invested;
+                    entries.Add(new NameInputDialog.PointEntry
+                    {
+                        Key = "BaseStatPoints",
+                        Label = $"Attribute Points (free:{bsp.BaseValue:F0} used:{invested:F0})",
+                        OriginalValue = total,
+                        EditText = total.ToString("F0")
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogDebug($"[FixPoints] BaseStatPoints read failed: {ex}");
+            }
+
+            // Talent currency stats — compute total budget (available + invested) per currency.
+            // Stats live on two different containers:
+            //   hero.CharacterStats  — TalentPoints, CatalystTalentPoints, Sarras*
+            //   hero.HeroStats       — WyrdMemoryShards (King's Soul)
+            var heroTalents = hero.Talents;
+            if (heroTalents != null)
+            {
+                var currencyMap = new Dictionary<string, (Stat stat, int invested)>();
+                var typeNameToStatName = new Dictionary<string, string>();
+
+                void TryRegisterStat(string statName, object container)
+                {
+                    try
+                    {
+                        var prop = container.GetType().GetProperty(statName, BindingFlags.Instance | BindingFlags.Public);
+                        if (prop == null) return;
+                        var statObj = prop.GetValue(container);
+                        if (statObj is Stat stat)
+                        {
+                            currencyMap[statName] = (stat, 0);
+                            string typeName = stat.Type?.ToString();
+                            Log.LogDebug($"[FixPoints] Registered {statName}: type='{typeName}', base={stat.BaseValue}");
+                            if (typeName != null)
+                                typeNameToStatName[typeName] = statName;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.LogDebug($"[FixPoints] Failed reading {statName}: {ex.Message}");
+                    }
+                }
+
+                var charStats = hero.CharacterStats;
+                if (charStats != null)
+                {
+                    foreach (var statName in CharacterPointStatNames)
+                        TryRegisterStat(statName, charStats);
+                }
+
+                var heroStats = hero.HeroStats;
+                if (heroStats != null)
+                {
+                    foreach (var statName in HeroPointStatNames)
+                        TryRegisterStat(statName, heroStats);
+                }
+
+                // Count invested points per currency by matching StatType name
+                foreach (TalentTable table in heroTalents.Elements<TalentTable>())
+                {
+                    foreach (Talent talent in table.talents)
+                    {
+                        if (talent.Level <= 0) continue;
+                        try
+                        {
+                            var cs = talent.CurrencyStat;
+                            string csTypeName = cs?.Type?.ToString();
+                            if (cs != null && csTypeName != null && typeNameToStatName.TryGetValue(csTypeName, out string name))
+                            {
+                                var entry = currencyMap[name];
+                                currencyMap[name] = (entry.stat, entry.invested + talent.Level);
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                // Build combined ordered list for display
+                var allStatNames = new List<string>();
+                allStatNames.AddRange(CharacterPointStatNames);
+                allStatNames.AddRange(HeroPointStatNames);
+
+                foreach (var statName in allStatNames)
+                {
+                    if (!currencyMap.ContainsKey(statName)) continue;
+                    var (stat, invested) = currencyMap[statName];
+                    float available = stat.BaseValue;
+                    float total = available + invested;
+                    string label = PointStatLabels.ContainsKey(statName) ? PointStatLabels[statName] : statName;
+                    entries.Add(new NameInputDialog.PointEntry
+                    {
+                        Key = statName,
+                        Label = $"{label} (free:{available:F0} used:{invested})",
+                        OriginalValue = total,
+                        EditText = total.ToString("F0")
+                    });
+                }
+            }
+
+            if (entries.Count == 0)
+            {
+                ShowStatus("Could not read any point stats.");
+                return;
+            }
+
+            _view.nameDialog.OpenPointEditor(entries, DoFixPoints);
+        }
+
+        private void DoFixPoints(Dictionary<string, float> changes)
+        {
+            try
+            {
+                var hero = Hero.Current;
+                if (hero == null)
+                {
+                    ShowStatus("No hero available.");
+                    return;
+                }
+
+                int applied = 0;
+
+                // BaseStatPoints — newTotal is the desired total budget.
+                // Compute what free points should be: newTotal - currentlyInvested
+                if (changes.TryGetValue("BaseStatPoints", out float newAttrTotal))
+                {
+                    var bsp = hero.Development?.BaseStatPoints;
+                    if (bsp != null)
+                    {
+                        float invested = 0f;
+                        var rpgStats = hero.HeroRPGStats?.GetHeroRPGStats();
+                        if (rpgStats != null)
+                        {
+                            foreach (var stat in rpgStats)
+                                invested += stat.BaseInt - 1;
+                        }
+                        float newFree = newAttrTotal - invested;
+                        if (newFree < 0f) newFree = 0f;
+                        Log.LogDebug($"[FixPoints] BaseStatPoints: {bsp.BaseValue} -> {newFree} (total {newAttrTotal}, invested {invested})");
+                        bsp.SetTo(newFree, false, null);
+                        applied++;
+                    }
+                }
+
+                // Talent currency stats — newTotal is the desired total budget.
+                // Set BaseValue to newTotal - currentlyInvested.
+                // Stats live on two containers: hero.CharacterStats and hero.HeroStats.
+                var heroTalents = hero.Talents;
+                {
+                    var statObjects = new Dictionary<string, Stat>();
+
+                    void TryResolveStat(string statName, object container)
+                    {
+                        if (!changes.ContainsKey(statName)) return;
+                        try
+                        {
+                            var prop = container.GetType().GetProperty(statName, BindingFlags.Instance | BindingFlags.Public);
+                            if (prop == null) return;
+                            var statObj = prop.GetValue(container);
+                            if (statObj is Stat stat)
+                                statObjects[statName] = stat;
+                        }
+                        catch { }
+                    }
+
+                    var charStats = hero.CharacterStats;
+                    if (charStats != null)
+                    {
+                        foreach (var statName in CharacterPointStatNames)
+                            TryResolveStat(statName, charStats);
+                    }
+
+                    var heroStats = hero.HeroStats;
+                    if (heroStats != null)
+                    {
+                        foreach (var statName in HeroPointStatNames)
+                            TryResolveStat(statName, heroStats);
+                    }
+
+                    // Count currently invested per stat using StatType name matching
+                    var invested = new Dictionary<string, int>();
+                    foreach (var kv in statObjects)
+                        invested[kv.Key] = 0;
+
+                    if (heroTalents != null)
+                    {
+                        var typeNameToStatName = new Dictionary<string, string>();
+                        foreach (var kv in statObjects)
+                        {
+                            string typeName = kv.Value.Type?.ToString();
+                            if (typeName != null)
+                                typeNameToStatName[typeName] = kv.Key;
+                        }
+
+                        foreach (TalentTable table in heroTalents.Elements<TalentTable>())
+                        {
+                            foreach (Talent talent in table.talents)
+                            {
+                                if (talent.Level <= 0) continue;
+                                try
+                                {
+                                    var cs = talent.CurrencyStat;
+                                    if (cs == null) continue;
+                                    string csTypeName = cs.Type?.ToString();
+                                    if (csTypeName != null && typeNameToStatName.TryGetValue(csTypeName, out string name))
+                                        invested[name] += talent.Level;
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+
+                    foreach (var kv in statObjects)
+                    {
+                        float newTotal = changes[kv.Key];
+                        int inv = invested.ContainsKey(kv.Key) ? invested[kv.Key] : 0;
+                        float newFree = newTotal - inv;
+                        if (newFree < 0f) newFree = 0f;
+                        Log.LogDebug($"[FixPoints] {kv.Key}: {kv.Value.BaseValue} -> {newFree} (total {newTotal}, invested {inv})");
+                        kv.Value.SetTo(newFree, false, null);
+                        applied++;
+                    }
+                }
+
+                ShowStatus(applied > 0
+                    ? $"Fixed {applied} stat(s). Save your game to persist."
+                    : "No changes applied.");
+            }
+            catch (Exception ex)
+            {
+                Log.LogError($"[FixPoints] Failed: {ex}");
+                ShowStatus("Fix failed: " + ex.Message);
             }
         }
 

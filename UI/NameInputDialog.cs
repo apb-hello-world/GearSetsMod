@@ -1,10 +1,11 @@
 using System;
+using System.Collections.Generic;
 using GearSetsMod.Patches;
 using UnityEngine;
 
 namespace GearSetsMod.UI
 {
-    public enum ModalMode { TextInput, Confirm }
+    public enum ModalMode { TextInput, Confirm, PointEditor }
 
     public class NameInputDialog : MonoBehaviour
     {
@@ -23,6 +24,18 @@ namespace GearSetsMod.UI
         private GUIStyle _buttonStyle;
         private GUIStyle _labelStyle;
         private GUIStyle _messageStyle;
+
+        private List<PointEntry> _pointEntries;
+        private Action<Dictionary<string, float>> _onPointsConfirm;
+        private Vector2 _pointScrollPos;
+
+        public class PointEntry
+        {
+            public string Key;   // internal identifier for matching
+            public string Label; // display text shown to the user
+            public float OriginalValue;
+            public string EditText;
+        }
 
         public void Open()
         {
@@ -55,6 +68,18 @@ namespace GearSetsMod.UI
             GearSetsTabPatch.SuppressInput = true;
         }
 
+        public void OpenPointEditor(List<PointEntry> entries, Action<Dictionary<string, float>> onConfirm)
+        {
+            _pointEntries = entries;
+            _onPointsConfirm = onConfirm;
+            _message = "Edit Point Values";
+            Mode = ModalMode.PointEditor;
+            IsOpen = true;
+            _focusField = false;
+            _pointScrollPos = Vector2.zero;
+            GearSetsTabPatch.SuppressInput = true;
+        }
+
         private void Close()
         {
             IsOpen = false;
@@ -83,9 +108,13 @@ namespace GearSetsMod.UI
                             OnConfirm?.Invoke(Result);
                         }
                     }
-                    else
+                    else if (Mode == ModalMode.Confirm)
                     {
                         _onConfirmAction?.Invoke();
+                    }
+                    else if (Mode == ModalMode.PointEditor)
+                    {
+                        CommitPointEdits();
                     }
                     Close();
                     Event.current.Use();
@@ -95,7 +124,18 @@ namespace GearSetsMod.UI
 
             InitStyles();
 
-            float w = 420, h = Mode == ModalMode.TextInput ? 150 : 130;
+            float w, h;
+            if (Mode == ModalMode.PointEditor)
+            {
+                w = 520;
+                int rowCount = _pointEntries != null ? _pointEntries.Count : 0;
+                h = Mathf.Min(80 + rowCount * 30 + 60, 420);
+            }
+            else
+            {
+                w = 420;
+                h = Mode == ModalMode.TextInput ? 150 : 130;
+            }
             var rect = new Rect((Screen.width - w) / 2f, (Screen.height - h) / 2f, w, h);
 
             GUI.Box(new Rect(rect.x - 1, rect.y - 1, rect.width + 2, rect.height + 2), "", _borderStyle);
@@ -134,6 +174,48 @@ namespace GearSetsMod.UI
                 }
                 GUILayout.EndHorizontal();
             }
+            else if (Mode == ModalMode.PointEditor)
+            {
+                GUILayout.Label(_message, _labelStyle);
+                GUILayout.Space(6);
+
+                _pointScrollPos = GUILayout.BeginScrollView(_pointScrollPos,
+                    GUILayout.ExpandHeight(true));
+
+                if (_pointEntries != null)
+                {
+                    foreach (var entry in _pointEntries)
+                    {
+                        GUILayout.BeginHorizontal();
+                        GUILayout.Label(entry.Label, _messageStyle,
+                            GUILayout.Width(280), GUILayout.Height(26));
+                        entry.EditText = GUILayout.TextField(entry.EditText, 10,
+                            _fieldStyle, GUILayout.Height(26), GUILayout.Width(80));
+                        float orig = entry.OriginalValue;
+                        if (float.TryParse(entry.EditText, out float cur) && cur != orig)
+                            GUILayout.Label($"(was {orig:F0})", _labelStyle,
+                                GUILayout.Width(90), GUILayout.Height(26));
+                        else
+                            GUILayout.Label("", GUILayout.Width(90), GUILayout.Height(26));
+                        GUILayout.EndHorizontal();
+                    }
+                }
+
+                GUILayout.EndScrollView();
+
+                GUILayout.Space(6);
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("Apply", _buttonStyle, GUILayout.Height(30)))
+                {
+                    CommitPointEdits();
+                    Close();
+                }
+                if (GUILayout.Button("Cancel", _buttonStyle, GUILayout.Height(30)))
+                {
+                    Close();
+                }
+                GUILayout.EndHorizontal();
+            }
             else
             {
                 GUILayout.Space(10);
@@ -156,6 +238,19 @@ namespace GearSetsMod.UI
 
             if (Event.current.type == EventType.KeyDown || Event.current.type == EventType.KeyUp)
                 Event.current.Use();
+        }
+
+        private void CommitPointEdits()
+        {
+            if (_pointEntries == null || _onPointsConfirm == null) return;
+            var changes = new Dictionary<string, float>();
+            foreach (var entry in _pointEntries)
+            {
+                if (float.TryParse(entry.EditText, out float newVal) && newVal != entry.OriginalValue)
+                    changes[entry.Key] = newVal;
+            }
+            if (changes.Count > 0)
+                _onPointsConfirm(changes);
         }
 
         private void InitStyles()

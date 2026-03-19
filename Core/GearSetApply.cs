@@ -61,9 +61,8 @@ namespace GearSetsMod.Core
                 ReleaseStorage(storage, storageRequested);
             }
 
-            // Talents MUST be applied before RPG stats. The talent currency stat and RPG stat
-            // are the same object (e.g. Dex stat = DEX talent pool). After talents are invested,
-            // ApplyRpgStats sets the stat to the correct saved BaseValue.
+            // Talents use a separate currency (TalentPoints), not the RPG stats themselves.
+            // Apply talents first (reset + re-acquire), then transfer RPG stat points.
             ApplyTalents(hero, set);
             ApplyRpgStats(hero, set);
             RecalculateStats(hero);
@@ -322,54 +321,153 @@ namespace GearSetsMod.Core
 
             try
             {
-                // Reset all talents, refunding points to currency stats
+                // Phase 1: Identify tables that have saved talent data
+                var tablesWithData = new HashSet<TalentTable>();
                 foreach (TalentTable table in heroTalents.Elements<TalentTable>())
                 {
                     foreach (Talent talent in table.talents)
                     {
-                        if (talent.Level > 0)
-                            talent.Reset(withRefund: true);
+                        string talentName = talent.Template?.name ?? "";
+                        if (!string.IsNullOrEmpty(talentName) && set.TalentLevels.ContainsKey(talentName))
+                        {
+                            tablesWithData.Add(table);
+                            break;
+                        }
                     }
                 }
 
-                // All main talent trees (Str/End/Dex/Pra/Per/Spi) share a single currency
-                // stat. Ensure each currency stat has enough points for the total demand
-                // across all trees before acquiring levels.
-                var currencyDemand = new Dictionary<Stat, int>();
+                if (tablesWithData.Count == 0)
+                {
+                    Log.LogDebug("[ApplyTalents] No matching tables found for saved talent data");
+                    return;
+                }
+
+                // Phase 2: Collect currency types used by tables with data
+                var affectedCurrencies = new HashSet<string>();
+                foreach (TalentTable table in tablesWithData)
+                {
+                    foreach (Talent talent in table.talents)
+                    {
+                        try
+                        {
+                            var cs = talent.CurrencyStat;
+                            string typeKey = cs?.Type?.ToString();
+                            if (typeKey != null)
+                                affectedCurrencies.Add(typeKey);
+                        }
+                        catch { }
+                    }
+                }
+
+                // Phase 3: Find ALL tables that share any affected currency.
+                // This ensures that when loading a set that only has Dex talents,
+                // the Strength table (same TalentPoints currency) also gets reset
+                // so stale talents from a previous set don't bleed through.
+                var tablesToReset = new HashSet<TalentTable>();
                 foreach (TalentTable table in heroTalents.Elements<TalentTable>())
                 {
-                    int treeDemand = 0;
-                    Stat treeCurrency = null;
+                    foreach (Talent talent in table.talents)
+                    {
+                        try
+                        {
+                            var cs = talent.CurrencyStat;
+                            string typeKey = cs?.Type?.ToString();
+                            if (typeKey != null && affectedCurrencies.Contains(typeKey))
+                            {
+                                tablesToReset.Add(table);
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                // Phase 4: Budget snapshot — track currency across ALL tables being reset
+                var currencyStats = new Dictionary<string, (Stat stat, float baseValue)>();
+                var investedBefore = new Dictionary<string, int>();
+
+                foreach (TalentTable table in tablesToReset)
+                {
+                    foreach (Talent talent in table.talents)
+                    {
+                        try
+                        {
+                            var cs = talent.CurrencyStat;
+                            if (cs == null) continue;
+                            string typeKey = cs.Type?.ToString();
+                            if (typeKey == null) continue;
+
+                            if (!currencyStats.ContainsKey(typeKey))
+                                currencyStats[typeKey] = (cs, cs.BaseValue);
+
+                            if (talent.Level > 0)
+                            {
+                                if (investedBefore.ContainsKey(typeKey))
+                                    investedBefore[typeKey] += talent.Level;
+                                else
+                                    investedBefore[typeKey] = talent.Level;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                var totalBudget = new Dictionary<string, float>();
+                foreach (var kvp in currencyStats)
+                {
+                    int invested = investedBefore.ContainsKey(kvp.Key) ? investedBefore[kvp.Key] : 0;
+                    totalBudget[kvp.Key] = kvp.Value.baseValue + invested;
+                }
+
+                // Phase 5: Reset ALL tables sharing the affected currencies
+                foreach (TalentTable table in tablesToReset)
+                {
+                    foreach (Talent talent in table.talents)
+                    {
+                        if (talent.Level > 0)
+                            talent.Reset(withRefund: false);
+                    }
+                }
+
+                // Phase 6: Re-acquire only saved talents (from tablesWithData)
+                var currencyDemand = new Dictionary<string, int>();
+
+                // First pass: compute total demand across all tables
+                foreach (TalentTable table in tablesWithData)
+                {
                     foreach (Talent talent in table.talents)
                     {
                         string talentName = talent.Template?.name ?? "";
                         if (string.IsNullOrEmpty(talentName)) continue;
                         if (!set.TalentLevels.TryGetValue(talentName, out int targetLevel)) continue;
                         if (targetLevel <= 0) continue;
-                        treeDemand += targetLevel;
-                        if (treeCurrency == null)
+
+                        try
                         {
-                            try { treeCurrency = talent.CurrencyStat; } catch { }
+                            var cs = talent.CurrencyStat;
+                            string typeKey = cs?.Type?.ToString();
+                            if (typeKey != null)
+                            {
+                                if (currencyDemand.ContainsKey(typeKey))
+                                    currencyDemand[typeKey] += targetLevel;
+                                else
+                                    currencyDemand[typeKey] = targetLevel;
+                            }
                         }
-                    }
-                    if (treeCurrency != null && treeDemand > 0)
-                    {
-                        if (currencyDemand.ContainsKey(treeCurrency))
-                            currencyDemand[treeCurrency] += treeDemand;
-                        else
-                            currencyDemand[treeCurrency] = treeDemand;
+                        catch { }
                     }
                 }
 
+                // Set each currency to exactly the demand so acquisition succeeds
                 foreach (var cd in currencyDemand)
                 {
-                    if (cd.Key.BaseValue < cd.Value)
-                        cd.Key.SetTo(cd.Value, false, null);
+                    if (currencyStats.TryGetValue(cd.Key, out var entry))
+                        entry.stat.SetTo(cd.Value, false, null);
                 }
 
-                // Acquire saved levels, ordered by tree-level requirement within each table
+                // Second pass: acquire talents
                 int failedCount = 0;
-                foreach (TalentTable table in heroTalents.Elements<TalentTable>())
+                foreach (TalentTable table in tablesWithData)
                 {
                     var toApply = new List<(Talent talent, string name, int target)>();
                     foreach (Talent talent in table.talents)
@@ -403,6 +501,16 @@ namespace GearSetsMod.Core
                         table.ApplyTemporaryLevels();
                 }
 
+                // Phase 7: Restore each currency to totalBudget - newInvested
+                foreach (var kvp in totalBudget)
+                {
+                    int newInvested = currencyDemand.ContainsKey(kvp.Key) ? currencyDemand[kvp.Key] : 0;
+                    float correctValue = kvp.Value - newInvested;
+                    Log.LogDebug($"[ApplyTalents] currency restore: key={kvp.Key}, budget={kvp.Value}, invested={newInvested}, setting to {correctValue}");
+                    if (currencyStats.TryGetValue(kvp.Key, out var entry))
+                        entry.stat.SetTo(correctValue, false, null);
+                }
+
                 if (failedCount > 0)
                     Log.LogWarning($"[ApplyTalents] {failedCount} talent(s) failed to acquire");
             }
@@ -426,9 +534,19 @@ namespace GearSetsMod.Core
                     return;
                 }
 
+                var baseStatPoints = hero.Development?.BaseStatPoints;
+                if (baseStatPoints == null)
+                {
+                    Log.LogWarning("[ApplyRpgStats] hero.Development.BaseStatPoints is null, falling back to SetTo");
+                }
+
                 var rpgType = rpgStats.GetType();
                 bool isV1 = set.Version < 2;
 
+                Log.LogDebug($"[ApplyRpgStats] START set='{set.Name}' v={set.Version} freePoints={baseStatPoints?.BaseValue}");
+
+                // Resolve all stats and their deltas
+                var statEntries = new List<(string name, Stat stat, float delta)>();
                 foreach (var kvp in set.RpgStats)
                 {
                     try
@@ -445,12 +563,19 @@ namespace GearSetsMod.Core
                             Log.LogWarning($"[ApplyRpgStats] Stat object for '{kvp.Key}' is null");
                             continue;
                         }
+                        if (!(statObj is Stat stat))
+                        {
+                            Log.LogWarning($"[ApplyRpgStats] '{kvp.Key}' is not a Stat, skipping");
+                            continue;
+                        }
 
                         float targetBaseValue = isV1
                             ? MigrateV1StatValue(kvp.Key, kvp.Value, statObj)
                             : kvp.Value;
 
-                        ApplySingleStat(kvp.Key, targetBaseValue, statObj);
+                        float delta = targetBaseValue - stat.BaseValue;
+                        if (delta != 0f)
+                            statEntries.Add((kvp.Key, stat, delta));
                     }
                     catch (Exception ex)
                     {
@@ -458,8 +583,23 @@ namespace GearSetsMod.Core
                     }
                 }
 
+                // Two-pass: decreases first (frees points), then increases (spends points).
+                // This prevents BaseStatPoints from going negative mid-transfer.
+                foreach (var (name, stat, delta) in statEntries)
+                {
+                    if (delta >= 0f) continue;
+                    ApplySingleStat(name, stat, delta, baseStatPoints);
+                }
+                foreach (var (name, stat, delta) in statEntries)
+                {
+                    if (delta <= 0f) continue;
+                    ApplySingleStat(name, stat, delta, baseStatPoints);
+                }
+
+                Log.LogDebug($"[ApplyRpgStats] END freePoints={baseStatPoints?.BaseValue}");
+
                 if (isV1)
-                    Log.LogInfo("[ApplyRpgStats] v1 set loaded with approximate migration. Re-save the set for accurate BaseValue storage.");
+                    Log.LogDebug("[ApplyRpgStats] v1 set loaded with approximate migration. Re-save the set for accurate BaseValue storage.");
             }
             catch (Exception ex)
             {
@@ -507,40 +647,46 @@ namespace GearSetsMod.Core
         }
 
         /// <summary>
-        /// Sets a single RPG stat using Stat.SetTo() or reflection fallback.
+        /// Transfers RPG stat points using IncreaseBy/DecreaseBy, conserving total points.
+        /// Falls back to SetTo if BaseStatPoints is unavailable.
         /// </summary>
-        private static void ApplySingleStat(string statName, float targetBaseValue, object statObj)
+        private static void ApplySingleStat(string statName, Stat stat, float delta, Stat baseStatPoints)
         {
-            if (statObj is Stat stat)
+            if (baseStatPoints == null)
             {
-                stat.SetTo(targetBaseValue, false, null);
+                stat.SetTo(stat.BaseValue + delta, false, null);
+                return;
             }
-            else
+
+            if (delta > 0f)
             {
-                var setToMethod = statObj.GetType().GetMethod("SetTo", new[] { typeof(float), typeof(bool), typeof(object) });
-                if (setToMethod != null)
-                    setToMethod.Invoke(statObj, new object[] { targetBaseValue, false, null });
-                else
-                    Log.LogWarning($"[ApplyRpgStats] {statName}: SetTo method not found on {statObj.GetType().Name}");
+                stat.IncreaseBy(delta);
+                baseStatPoints.DecreaseBy(delta);
             }
+            else if (delta < 0f)
+            {
+                float absDelta = -delta;
+                stat.DecreaseBy(absDelta);
+                baseStatPoints.IncreaseBy(absDelta);
+            }
+
+            Log.LogDebug($"[ApplyRpgStats] {statName}: delta={delta:+0.#;-0.#;0}, newBase={stat.BaseValue}, freePoints={baseStatPoints.BaseValue}");
         }
 
         private static void RecalculateStats(Hero hero)
         {
             try
             {
-                // Do NOT call HeroRPGStats.RecalculateAllStats() — it resets stats from
-                // an internal wrapper, undoing changes made by SetTo() in ApplyRpgStats.
-
+                // HeroStats covers movement/combat/crafting — safe, no RPG stat or talent impact
                 try { hero.HeroStats.RecalculateAllStats(false); }
                 catch (Exception ex) { Log.LogWarning($"[RecalculateStats] HeroStats failed: {ex.Message}"); }
 
-                try
-                {
-                    int level = (int)hero.CharacterStats.Level.BaseValue;
-                    hero.CharacterStats.RecalculateAllStats(level, level, false);
-                }
-                catch (Exception ex) { Log.LogWarning($"[RecalculateStats] CharacterStats failed: {ex.Message}"); }
+                // CharacterStats.RecalculateAllStats with saveBefore:false is destructive —
+                // it reconstructs ALL stat objects from stale diffs, destroying the RPG stat
+                // and talent point changes we just applied. The Origin Potion doesn't call it
+                // either. RestoreStats only refills limited stats (HP, stamina, etc.) and is safe.
+                try { hero.RestoreStats(); }
+                catch (Exception ex) { Log.LogWarning($"[RecalculateStats] RestoreStats failed: {ex.Message}"); }
 
                 RecalculateMultStats(hero);
             }

@@ -33,6 +33,7 @@ namespace GearSetsMod.UI
         internal Button loadBtn;
         internal Button deleteBtn;
         internal Button resetBtn;
+        internal Button fixPointsBtn;
 
         protected override void OnInitialize()
         {
@@ -224,6 +225,7 @@ namespace GearSetsMod.UI
             loadBtn = CreateButton(btnRow.transform, "LoadBtn", "LOAD SET", new Color(0.45f, 0.65f, 0.85f, 1f));
             deleteBtn = CreateButton(btnRow.transform, "DeleteBtn", "DELETE", new Color(0.75f, 0.35f, 0.35f, 1f));
             resetBtn = CreateButton(btnRow.transform, "ResetBtn", "RESET BUILD", new Color(0.85f, 0.55f, 0.25f, 1f));
+            fixPointsBtn = CreateButton(btnRow.transform, "FixPointsBtn", "FIX POINTS", new Color(0.75f, 0.45f, 0.75f, 1f));
         }
 
         private void BuildStatusBar()
