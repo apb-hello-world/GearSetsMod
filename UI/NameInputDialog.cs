@@ -134,11 +134,11 @@ namespace GearSetsMod.UI
             else
             {
                 w = 420;
-                h = Mode == ModalMode.TextInput ? 150 : 130;
+                h = Mode == ModalMode.TextInput ? 170 : 160;
             }
             var rect = new Rect((Screen.width - w) / 2f, (Screen.height - h) / 2f, w, h);
 
-            GUI.Box(new Rect(rect.x - 1, rect.y - 1, rect.width + 2, rect.height + 2), "", _borderStyle);
+            GUI.Box(new Rect(rect.x - 2, rect.y - 2, rect.width + 4, rect.height + 4), "", _borderStyle);
             GUI.Box(rect, "", _boxStyle);
             GUILayout.BeginArea(new Rect(rect.x + 20, rect.y + 15, w - 40, h - 30));
 
@@ -157,21 +157,29 @@ namespace GearSetsMod.UI
                     _focusField = false;
                 }
 
-                GUILayout.Space(10);
+                GUILayout.Space(15);
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("Save", _buttonStyle, GUILayout.Height(30)))
+                GUILayout.FlexibleSpace();
+                if (GUILayout.Button("Save", _buttonStyle, GUILayout.Width(110), GUILayout.Height(35)))
                 {
                     if (!string.IsNullOrEmpty(_text.Trim()))
                     {
                         Result = _text.Trim();
-                        OnConfirm?.Invoke(Result);
+                        Action<string> cb = OnConfirm;
+                        Close();
+                        cb?.Invoke(Result);
                     }
-                    Close();
+                    else
+                    {
+                        Close();
+                    }
                 }
-                if (GUILayout.Button("Cancel", _buttonStyle, GUILayout.Height(30)))
+                GUILayout.Space(20);
+                if (GUILayout.Button("Cancel", _buttonStyle, GUILayout.Width(110), GUILayout.Height(35)))
                 {
                     Close();
                 }
+                GUILayout.FlexibleSpace();
                 GUILayout.EndHorizontal();
             }
             else if (Mode == ModalMode.PointEditor)
@@ -203,34 +211,41 @@ namespace GearSetsMod.UI
 
                 GUILayout.EndScrollView();
 
-                GUILayout.Space(6);
+                GUILayout.Space(10);
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("Apply", _buttonStyle, GUILayout.Height(30)))
+                GUILayout.FlexibleSpace();
+                if (GUILayout.Button("Apply", _buttonStyle, GUILayout.Width(110), GUILayout.Height(35)))
                 {
                     CommitPointEdits();
                     Close();
                 }
-                if (GUILayout.Button("Cancel", _buttonStyle, GUILayout.Height(30)))
+                GUILayout.Space(20);
+                if (GUILayout.Button("Cancel", _buttonStyle, GUILayout.Width(110), GUILayout.Height(35)))
                 {
                     Close();
                 }
+                GUILayout.FlexibleSpace();
                 GUILayout.EndHorizontal();
             }
             else
             {
                 GUILayout.Space(10);
                 GUILayout.Label(_message, _messageStyle);
-                GUILayout.Space(15);
+                GUILayout.Space(20);
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("Confirm", _buttonStyle, GUILayout.Height(30)))
+                GUILayout.FlexibleSpace();
+                if (GUILayout.Button("Confirm", _buttonStyle, GUILayout.Width(110), GUILayout.Height(35)))
                 {
-                    _onConfirmAction?.Invoke();
+                    Action cb = _onConfirmAction;
+                    Close();
+                    cb?.Invoke();
+                }
+                GUILayout.Space(20);
+                if (GUILayout.Button("Cancel", _buttonStyle, GUILayout.Width(110), GUILayout.Height(35)))
+                {
                     Close();
                 }
-                if (GUILayout.Button("Cancel", _buttonStyle, GUILayout.Height(30)))
-                {
-                    Close();
-                }
+                GUILayout.FlexibleSpace();
                 GUILayout.EndHorizontal();
             }
 
@@ -275,13 +290,13 @@ namespace GearSetsMod.UI
             _buttonStyle = new GUIStyle();
             _buttonStyle.fontSize = 16;
             _buttonStyle.alignment = TextAnchor.MiddleCenter;
-            _buttonStyle.normal.textColor = Color.white;
-            _buttonStyle.normal.background = MakeTex(2, 2, new Color(0.2f, 0.2f, 0.25f, 1f));
-            _buttonStyle.hover.textColor = Color.white;
-            _buttonStyle.hover.background = MakeTex(2, 2, new Color(0.3f, 0.3f, 0.35f, 1f));
+            _buttonStyle.normal.textColor = new Color(0.85f, 0.75f, 0.45f);
+            _buttonStyle.normal.background = MakeTex(2, 2, new Color(0.12f, 0.12f, 0.15f, 1f));
+            _buttonStyle.hover.textColor = new Color(0.95f, 0.90f, 0.55f);
+            _buttonStyle.hover.background = MakeTex(2, 2, new Color(0.20f, 0.20f, 0.25f, 1f));
             _buttonStyle.active.textColor = Color.white;
-            _buttonStyle.active.background = MakeTex(2, 2, new Color(0.15f, 0.15f, 0.2f, 1f));
-            _buttonStyle.padding = new RectOffset(10, 10, 5, 5);
+            _buttonStyle.active.background = MakeTex(2, 2, new Color(0.10f, 0.10f, 0.12f, 1f));
+            _buttonStyle.padding = new RectOffset(10, 10, 6, 6);
 
             _labelStyle = new GUIStyle();
             _labelStyle.fontSize = 18;

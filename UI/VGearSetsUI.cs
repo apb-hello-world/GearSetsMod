@@ -10,15 +10,15 @@ namespace GearSetsMod.UI
     [NoPrefab]
     public class VGearSetsUI : View<GearSetsUI>
     {
-        private static readonly Color BgDark = new Color(0.08f, 0.08f, 0.10f, 0.95f);
-        private static readonly Color PanelBg = new Color(0.12f, 0.12f, 0.15f, 0.90f);
-        private static readonly Color BtnNormal = new Color(0.18f, 0.18f, 0.22f, 1f);
-        private static readonly Color BtnHover = new Color(0.25f, 0.25f, 0.30f, 1f);
-        private static readonly Color BtnSelected = new Color(0.30f, 0.55f, 0.45f, 1f);
+        private static readonly Color BgDark = new Color(0.06f, 0.05f, 0.05f, 0.95f);
+        private static readonly Color PanelBg = new Color(0.09f, 0.08f, 0.08f, 0.90f);
+        private static readonly Color BtnNormal = new Color(0.15f, 0.14f, 0.14f, 1f);
+        private static readonly Color BtnHover = new Color(0.22f, 0.20f, 0.19f, 1f);
+        private static readonly Color BtnSelected = new Color(0.40f, 0.35f, 0.25f, 1f);
         private static readonly Color AccentGold = new Color(0.85f, 0.75f, 0.45f, 1f);
-        private static readonly Color TextDim = new Color(0.55f, 0.55f, 0.58f, 1f);
-        private static readonly Color TextLight = new Color(0.88f, 0.88f, 0.90f, 1f);
-        private static readonly Color DividerColor = new Color(0.25f, 0.25f, 0.30f, 0.6f);
+        private static readonly Color TextDim = new Color(0.65f, 0.60f, 0.55f, 1f);
+        private static readonly Color TextLight = new Color(0.90f, 0.88f, 0.85f, 1f);
+        private static readonly Color DividerColor = new Color(0.30f, 0.25f, 0.20f, 0.6f);
 
         internal Transform setListContent;
         internal TextMeshProUGUI detailTitle;
@@ -34,6 +34,7 @@ namespace GearSetsMod.UI
         internal Button deleteBtn;
         internal Button resetBtn;
         internal Button fixPointsBtn;
+        internal Button newSetBtn;
 
         protected override void OnInitialize()
         {
@@ -215,11 +216,13 @@ namespace GearSetsMod.UI
             var hlg = btnRow.AddComponent<HorizontalLayoutGroup>();
             hlg.spacing = 10f;
             hlg.padding = new RectOffset(4, 4, 4, 4);
-            hlg.childForceExpandWidth = true;
+            hlg.childForceExpandWidth = false;
             hlg.childForceExpandHeight = true;
             hlg.childControlWidth = true;
             hlg.childControlHeight = true;
+            hlg.childAlignment = TextAnchor.MiddleCenter;
 
+            newSetBtn = CreateButton(btnRow.transform, "NewSetBtn", "NEW SET", new Color(0.45f, 0.85f, 0.45f, 1f));
             saveBtn = CreateButton(btnRow.transform, "SaveBtn", "SAVE CURRENT", AccentGold);
             updateBtn = CreateButton(btnRow.transform, "UpdateBtn", "UPDATE", new Color(0.55f, 0.78f, 0.55f, 1f));
             loadBtn = CreateButton(btnRow.transform, "LoadBtn", "LOAD SET", new Color(0.45f, 0.65f, 0.85f, 1f));
@@ -245,7 +248,8 @@ namespace GearSetsMod.UI
             btnObj.transform.SetParent(parent, false);
             var le = btnObj.AddComponent<LayoutElement>();
             le.minHeight = 36f;
-            le.preferredHeight = 40f;
+            le.preferredHeight = 44f;
+            le.preferredWidth = 145f;
 
             var btnImg = btnObj.AddComponent<Image>();
             btnImg.color = BtnNormal;

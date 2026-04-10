@@ -2,10 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Awaken.TG.Main.Character;
 using Awaken.TG.Main.Heroes;
 using Awaken.TG.Main.Heroes.CharacterSheet.Tabs;
 using Awaken.TG.Main.Heroes.Development.Talents;
+using Awaken.TG.Main.Heroes.Items;
+using Awaken.TG.Main.Heroes.Items.Loadouts;
 using Awaken.TG.Main.Heroes.Stats;
+using Awaken.TG.Main.Heroes.Storage;
 using BepInEx.Logging;
 using GearSetsMod.Core;
 using UnityEngine;
@@ -41,6 +45,7 @@ namespace GearSetsMod.UI
             _view = view;
             _selectedSet = null;
 
+            view.newSetBtn.onClick.AddListener(OnNewSetClicked);
             view.saveBtn.onClick.AddListener(OnSaveClicked);
             view.updateBtn.onClick.AddListener(OnUpdateClicked);
             view.loadBtn.onClick.AddListener(OnLoadClicked);
@@ -258,6 +263,102 @@ namespace GearSetsMod.UI
             LayoutRebuilder.ForceRebuildLayoutImmediate(_view.detailLeftCol.GetComponent<RectTransform>());
             LayoutRebuilder.ForceRebuildLayoutImmediate(_view.detailRightCol.GetComponent<RectTransform>());
             LayoutRebuilder.ForceRebuildLayoutImmediate(_view.detailContent.GetComponent<RectTransform>());
+        }
+
+        private void OnNewSetClicked()
+        {
+            if (_view.nameDialog == null) return;
+            _view.nameDialog.OpenConfirm("Create a Blank Set?\nThis will stash all your gear and reset all your points.", () => {
+                _view.nameDialog.OnConfirm = DoNewSet;
+                _view.nameDialog.Open();
+            });
+        }
+
+        private void DoNewSet(string name)
+        {
+            try
+            {
+                var hero = Hero.Current;
+                if (hero == null)
+                {
+                    ShowStatus("New Set failed — no hero available.");
+                    return;
+                }
+
+                if (string.IsNullOrEmpty(name))
+                    name = "NewSet_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+
+                // 1. Unequip everything to Stash
+                HeroStorage storage = hero.Element<HeroStorage>();
+                if (storage != null && hero.HeroItems != null)
+                {
+                    storage.RequestItems();
+                    var itemsToStash = new HashSet<Awaken.TG.Main.Heroes.Items.Item>();
+
+                    // Loadouts
+                    for (int i = 0; i < 4; i++)
+                    {
+                        var loadout = hero.HeroItems.LoadoutAt(i) as HeroLoadout;
+                        if (loadout == null) continue;
+                        var cacheField = typeof(HeroLoadout).GetField("_cache", BindingFlags.Instance | BindingFlags.NonPublic);
+                        var cache = cacheField?.GetValue(loadout) as System.Collections.IList;
+                        if (cache != null)
+                        {
+                            foreach (var entry in cache)
+                            {
+                                var itemField = entry.GetType().GetField("item");
+                                var item = itemField?.GetValue(entry) as Awaken.TG.Main.Heroes.Items.Item;
+                                if (item != null) itemsToStash.Add(item);
+                            }
+                        }
+                    }
+
+                    // Armor
+                    var armorSlotTypes = new[] { EquipmentSlotType.Helmet, EquipmentSlotType.Cuirass, EquipmentSlotType.Gauntlets, EquipmentSlotType.Greaves, EquipmentSlotType.Boots, EquipmentSlotType.Back, EquipmentSlotType.Amulet, EquipmentSlotType.Ring1, EquipmentSlotType.Ring2, EquipmentSlotType.HorseArmor, EquipmentSlotType.FoodQuickSlot, EquipmentSlotType.QuickSlot2, EquipmentSlotType.QuickSlot3 };
+                    foreach (var slot in armorSlotTypes)
+                    {
+                        var item = CharacterInventoryExtension.EquippedItem(hero.HeroItems, slot);
+                        if (item != null) itemsToStash.Add(item);
+                    }
+
+                    foreach (var item in itemsToStash)
+                    {
+                        try { item.MoveTo(storage); } catch { }
+                    }
+
+                    try { storage.ReleaseItems(); } catch { }
+                }
+
+                // 2. Refund all points quietly
+                hero.Talents?.Reset();
+                var rpgStats = hero.HeroRPGStats?.GetHeroRPGStats();
+                if (rpgStats != null)
+                {
+                    foreach (var stat in rpgStats)
+                    {
+                        int refund = stat.BaseInt - 1;
+                        if (refund > 0)
+                            hero.Development.BaseStatPoints.IncreaseBy(refund);
+                        stat.SetTo(1f);
+                    }
+                }
+
+                // 3. Save Empty Set
+                var set = GearSetCapture.CaptureCurrentState(name);
+                if (set != null)
+                {
+                    SetManager.Save(set);
+                    _selectedSet = set;
+                    RefreshSetList();
+                    UpdateDetailPanel();
+                    ShowStatus($"Blank set created: {set.Name} (Items stashed)");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogError($"[NewSet] Failed: {ex}");
+                ShowStatus("New Set failed: " + ex.Message);
+            }
         }
 
         private void OnSaveClicked()
