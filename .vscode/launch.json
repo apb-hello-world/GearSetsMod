@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Build & Copy to Game Dir",
+            "type": "coreclr",
+            "request": "launch",
+            "program": "sleep",
+            "args": ["0"],
+            "preLaunchTask": "build & copy to game folder",
+            "internalConsoleOptions": "neverOpen"
+        },
+        {
+            "name": "Build, Launch, & Debug",
+            "type": "unity",
+            "request": "attach",
+            "preLaunchTask": "Deploy & Launch Game via Steam"
+        }
+    ]
+}

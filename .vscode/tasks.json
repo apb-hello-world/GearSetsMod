@@ -1,0 +1,45 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/GearSetsMod.csproj",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "build & copy to game folder",
+            "type": "shell",
+            "command": "dotnet build -c Debug && cp ${workspaceFolder}/bin/Debug/netstandard2.1/GearSetsMod.dll \"${config:gameFolderPath}/BepInEx/plugins/GearSetsMod.dll\"",
+            "problemMatcher": "$msCompile",
+            "group": "build",
+            "detail": "Builds the mod and copies to the game's BepInEx/plugins folder. Update gameFolderPath in .vscode/settings.json or replace it here."
+        },
+        {
+            "label": "build release zip",
+            "type": "shell",
+            "command": "dotnet build -c Release && mkdir -p ${workspaceFolder}/dist && zip -j ${workspaceFolder}/dist/GearSetsMod_Release.zip ${workspaceFolder}/bin/Release/netstandard2.1/GearSetsMod.dll",
+            "problemMatcher": "$msCompile",
+            "group": "build",
+            "detail": "Builds in Release mode and makes a zip file ready for Nexus Mods."
+        },
+        {
+            "label": "Deploy & Launch Game via Steam",
+            "dependsOn": "build & copy to game folder",
+            "type": "shell",
+            "command": "xdg-open steam://rungameid/1466060 && sleep 5",
+            "problemMatcher": [],
+            "detail": "Builds the mod, deploys it, and launches Tainted Grail via Steam."
+        }
+    ]
+}
