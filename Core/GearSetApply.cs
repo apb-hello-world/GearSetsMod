@@ -382,90 +382,17 @@ namespace GearSetsMod.Core
                     }
                 }
 
-                // Phase 4: Budget snapshot — track currency across ALL tables being reset
-                var currencyStats = new Dictionary<string, (Stat stat, float baseValue)>();
-                var investedBefore = new Dictionary<string, int>();
-
-                foreach (TalentTable table in tablesToReset)
-                {
-                    foreach (Talent talent in table.talents)
-                    {
-                        try
-                        {
-                            var cs = talent.CurrencyStat;
-                            if (cs == null) continue;
-                            string typeKey = cs.Type?.ToString();
-                            if (typeKey == null) continue;
-
-                            if (!currencyStats.ContainsKey(typeKey))
-                                currencyStats[typeKey] = (cs, cs.BaseValue);
-
-                            if (talent.Level > 0)
-                            {
-                                if (investedBefore.ContainsKey(typeKey))
-                                    investedBefore[typeKey] += talent.Level;
-                                else
-                                    investedBefore[typeKey] = talent.Level;
-                            }
-                        }
-                        catch { }
-                    }
-                }
-
-                var totalBudget = new Dictionary<string, float>();
-                foreach (var kvp in currencyStats)
-                {
-                    int invested = investedBefore.ContainsKey(kvp.Key) ? investedBefore[kvp.Key] : 0;
-                    totalBudget[kvp.Key] = kvp.Value.baseValue + invested;
-                }
-
-                // Phase 5: Reset ALL tables sharing the affected currencies
+                // Phase 4: Reset ALL tables sharing the affected currencies
                 foreach (TalentTable table in tablesToReset)
                 {
                     foreach (Talent talent in table.talents)
                     {
                         if (talent.Level > 0)
-                            talent.Reset(withRefund: false);
+                            talent.Reset(withRefund: true);
                     }
                 }
 
-                // Phase 6: Re-acquire only saved talents (from tablesWithData)
-                var currencyDemand = new Dictionary<string, int>();
-
-                // First pass: compute total demand across all tables
-                foreach (TalentTable table in tablesWithData)
-                {
-                    foreach (Talent talent in table.talents)
-                    {
-                        string talentName = talent.Template?.name ?? "";
-                        if (string.IsNullOrEmpty(talentName)) continue;
-                        if (!set.TalentLevels.TryGetValue(talentName, out int targetLevel)) continue;
-                        if (targetLevel <= 0) continue;
-
-                        try
-                        {
-                            var cs = talent.CurrencyStat;
-                            string typeKey = cs?.Type?.ToString();
-                            if (typeKey != null)
-                            {
-                                if (currencyDemand.ContainsKey(typeKey))
-                                    currencyDemand[typeKey] += targetLevel;
-                                else
-                                    currencyDemand[typeKey] = targetLevel;
-                            }
-                        }
-                        catch { }
-                    }
-                }
-
-                // Set each currency to exactly the demand so acquisition succeeds
-                foreach (var cd in currencyDemand)
-                {
-                    if (currencyStats.TryGetValue(cd.Key, out var entry))
-                        entry.stat.SetTo(cd.Value, false, null);
-                }
-
-                // Second pass: acquire talents
+                // Phase 5: Re-acquire only saved talents (from tablesWithData)
                 int failedCount = 0;
                 foreach (TalentTable table in tablesWithData)
                 {
@@ -499,16 +426,6 @@ namespace GearSetsMod.Core
 
                     if (treeHasAcquiredLevels)
                         table.ApplyTemporaryLevels();
-                }
-
-                // Phase 7: Restore each currency to totalBudget - newInvested
-                foreach (var kvp in totalBudget)
-                {
-                    int newInvested = currencyDemand.ContainsKey(kvp.Key) ? currencyDemand[kvp.Key] : 0;
-                    float correctValue = kvp.Value - newInvested;
-                    Log.LogDebug($"[ApplyTalents] currency restore: key={kvp.Key}, budget={kvp.Value}, invested={newInvested}, setting to {correctValue}");
-                    if (currencyStats.TryGetValue(kvp.Key, out var entry))
-                        entry.stat.SetTo(correctValue, false, null);
                 }
 
                 if (failedCount > 0)
