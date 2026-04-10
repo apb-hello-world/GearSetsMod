@@ -21,12 +21,6 @@ namespace GearSetsMod.Core
     {
         private static readonly ManualLogSource Log = BepInEx.Logging.Logger.CreateLogSource("GearSetsMod.Apply");
 
-        /// <summary>
-        /// Item GUIDs pulled from stash during the last load. On next load, items not
-        /// needed by the new set are returned to stash.
-        /// </summary>
-        private static List<string> _lastStashPulledGuids = new List<string>();
-
         public static string ApplySet(GearSet set)
         {
             var hero = Hero.Current;
@@ -37,6 +31,8 @@ namespace GearSetsMod.Core
 
             int stashPulledCount = 0;
             int missingCount = 0;
+            int stashReturnedCount = 0;
+            int stashFullErrorCount = 0;
             var missingItems = new List<string>();
             HeroStorage storage = null;
             bool storageRequested = false;
@@ -48,7 +44,7 @@ namespace GearSetsMod.Core
                     newSetGuids.Add(kvp.Value);
             }
 
-            int stashReturnedCount = ReturnStashItems(hero, heroItems, newSetGuids, ref storage, ref storageRequested);
+            StashUnequippedItems(hero, heroItems, newSetGuids, ref storage, ref storageRequested, ref stashReturnedCount, ref stashFullErrorCount);
 
             var newPulledGuids = new List<string>();
             try
@@ -67,49 +63,74 @@ namespace GearSetsMod.Core
             ApplyRpgStats(hero, set);
             RecalculateStats(hero);
 
-            _lastStashPulledGuids = newPulledGuids;
-
-            return BuildStatusMessage(set, hero, stashReturnedCount, stashPulledCount, missingCount);
+            return BuildStatusMessage(set, hero, stashReturnedCount, stashPulledCount, stashFullErrorCount, missingCount);
         }
 
-        /// <summary>
-        /// Returns previously stash-pulled items that aren't needed by the new set.
-        /// </summary>
-        private static int ReturnStashItems(
+        private static void StashUnequippedItems(
             Hero hero, HeroItems heroItems, HashSet<string> newSetGuids,
-            ref HeroStorage storage, ref bool storageRequested)
+            ref HeroStorage storage, ref bool storageRequested, 
+            ref int stashReturnedCount, ref int stashFullErrorCount)
         {
-            int returned = 0;
-            if (_lastStashPulledGuids.Count == 0)
-                return returned;
-
             try
             {
-                storage = hero.Element<HeroStorage>();
-                if (storage != null)
+                var itemsToStash = new HashSet<Item>();
+
+                for (int loadoutIdx = 0; loadoutIdx < 4; loadoutIdx++)
                 {
-                    storage.RequestItems();
-                    storageRequested = true;
+                    HeroLoadout loadout = heroItems.LoadoutAt(loadoutIdx) as HeroLoadout;
+                    if (loadout == null) continue;
 
-                    foreach (var guid in _lastStashPulledGuids)
+                    var cacheField = typeof(HeroLoadout).GetField("_cache", BindingFlags.Instance | BindingFlags.NonPublic);
+                    var cache = cacheField?.GetValue(loadout) as System.Collections.IList;
+                    if (cache != null)
                     {
-                        if (newSetGuids.Contains(guid))
-                            continue;
+                        foreach (var entry in cache)
+                        {
+                            var itemField = entry.GetType().GetField("item");
+                            var item = itemField?.GetValue(entry) as Item;
+                            if (item != null && !newSetGuids.Contains(item.Template?.GUID))
+                                itemsToStash.Add(item);
+                        }
+                    }
+                }
 
-                        var itemToReturn = heroItems.Items.FirstOrDefault(i => i.Template?.GUID == guid);
-                        if (itemToReturn != null)
+                var armorSlotTypes = new[]
+                {
+                    EquipmentSlotType.Helmet, EquipmentSlotType.Cuirass, EquipmentSlotType.Gauntlets,
+                    EquipmentSlotType.Greaves, EquipmentSlotType.Boots, EquipmentSlotType.Back,
+                    EquipmentSlotType.Amulet, EquipmentSlotType.Ring1, EquipmentSlotType.Ring2,
+                    EquipmentSlotType.HorseArmor,
+                    EquipmentSlotType.FoodQuickSlot, EquipmentSlotType.QuickSlot2, EquipmentSlotType.QuickSlot3
+                };
+
+                foreach (var slotType in armorSlotTypes)
+                {
+                    var item = CharacterInventoryExtension.EquippedItem(heroItems, slotType);
+                    if (item != null && !newSetGuids.Contains(item.Template?.GUID))
+                        itemsToStash.Add(item);
+                }
+
+                if (itemsToStash.Count > 0)
+                {
+                    storage = hero.Element<HeroStorage>();
+                    if (storage != null)
+                    {
+                        storage.RequestItems();
+                        storageRequested = true;
+
+                        foreach(var item in itemsToStash)
                         {
                             try
                             {
-                                var result = itemToReturn.MoveTo(storage);
+                                var result = item.MoveTo(storage);
                                 if (result != null)
-                                    returned++;
+                                    stashReturnedCount++;
                                 else
-                                    Log.LogWarning($"[ReturnStash] MoveTo(stash) returned null for '{itemToReturn.DisplayName}'");
+                                    stashFullErrorCount++;
                             }
                             catch (Exception ex)
                             {
-                                Log.LogWarning($"[ReturnStash] Failed to return item {guid}: {ex.Message}");
+                                Log.LogWarning($"[StashUnequippedItems] item {item.Template?.GUID} error: {ex.Message}");
                             }
                         }
                     }
@@ -117,11 +138,8 @@ namespace GearSetsMod.Core
             }
             catch (Exception ex)
             {
-                Log.LogWarning($"[ReturnStash] Failed: {ex.Message}");
+                Log.LogWarning($"[StashUnequippedItems] Failed: {ex.Message}");
             }
-
-            _lastStashPulledGuids.Clear();
-            return returned;
         }
 
         /// <summary>
@@ -220,13 +238,15 @@ namespace GearSetsMod.Core
             catch (Exception ex) { Log.LogWarning($"[ReleaseStorage] Failed: {ex.Message}"); }
         }
 
-        private static string BuildStatusMessage(GearSet set, Hero hero, int stashReturnedCount, int stashPulledCount, int missingCount)
+        private static string BuildStatusMessage(GearSet set, Hero hero, int stashReturnedCount, int stashPulledCount, int stashFullErrorCount, int missingCount)
         {
             var parts = new List<string>();
             parts.Add("Loaded: " + set.Name);
 
             if (stashReturnedCount > 0)
                 parts.Add($"{stashReturnedCount} item(s) returned to stash");
+            if (stashFullErrorCount > 0)
+                parts.Add($"[!] {stashFullErrorCount} item(s) failed to stash (Stash Full?)");
             if (stashPulledCount > 0)
                 parts.Add($"{stashPulledCount} item(s) pulled from stash");
             if (missingCount > 0)
@@ -406,21 +426,52 @@ namespace GearSetsMod.Core
                         toApply.Add((talent, talentName, targetLevel));
                     }
 
-                    toApply.Sort((a, b) => a.talent.RequiredTreeLevelToUnlock.CompareTo(b.talent.RequiredTreeLevelToUnlock));
-
                     bool treeHasAcquiredLevels = false;
-                    foreach (var (talent, talentName, targetLevel) in toApply)
+                    bool progress = true;
+
+                    while (progress && toApply.Count > 0)
                     {
-                        for (int i = 0; i < targetLevel; i++)
+                        progress = false;
+                        for (int i = toApply.Count - 1; i >= 0; i--)
                         {
-                            if (!talent.CanAcquireNextLevel(out Talent.AcquiringProblem problem))
+                            var item = toApply[i];
+                            int acquiredThisPass = 0;
+                            
+                            while (item.target > 0)
                             {
-                                Log.LogWarning($"[ApplyTalents] Cannot acquire level {i+1}/{targetLevel} for '{talentName}': {problem}");
-                                failedCount++;
-                                break;
+                                if (item.talent.CanAcquireNextLevel(out Talent.AcquiringProblem problem))
+                                {
+                                    item.talent.AcquireNextTemporaryLevel();
+                                    item.target--;
+                                    acquiredThisPass++;
+                                    treeHasAcquiredLevels = true;
+                                    progress = true;
+                                }
+                                else
+                                {
+                                    break;
+                                }
                             }
-                            talent.AcquireNextTemporaryLevel();
-                            treeHasAcquiredLevels = true;
+                            
+                            if (acquiredThisPass > 0)
+                            {
+                                toApply[i] = (item.talent, item.name, item.target);
+                            }
+                            
+                            if (item.target == 0)
+                            {
+                                toApply.RemoveAt(i);
+                            }
+                        }
+                    }
+
+                    if (toApply.Count > 0)
+                    {
+                        foreach (var failed in toApply)
+                        {
+                            failed.talent.CanAcquireNextLevel(out var prob);
+                            Log.LogWarning($"[ApplyTalents] Failed to acquire {failed.target} levels for '{failed.name}': {prob}");
+                            failedCount += failed.target;
                         }
                     }
 
