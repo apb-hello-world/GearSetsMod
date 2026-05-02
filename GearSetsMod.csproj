@@ -29,6 +29,7 @@
     <Reference Include="TG.Main"><HintPath>lib/TG.Main.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Awaken.Utility"><HintPath>lib/Awaken.Utility.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.TextMeshPro"><HintPath>lib/Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextCoreTextEngineModule"><HintPath>lib/UnityEngine.TextCoreTextEngineModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.InputLegacyModule"><HintPath>lib/UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>lib/UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.TextRenderingModule"><HintPath>lib/UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>

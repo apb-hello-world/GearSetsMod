@@ -6,6 +6,8 @@ using Awaken.TG.Main.Heroes.CharacterSheet;
 using Awaken.TG.Main.Heroes.CharacterSheet.Tabs;
 using Awaken.TG.Main.UI.Components.Tabs;
 using BepInEx.Logging;
+using TMPro;
+using UnityEngine.UI;
 
 namespace GearSetsMod.Patches
 {
@@ -15,9 +17,16 @@ namespace GearSetsMod.Patches
         private static bool _initialized;
         private static Harmony _harmony;
         private static GameObject _setsButtonInstance;
+        private static GameObject _fallbackButtonInstance;
+        private static Image _fallbackButtonImage;
+        private static TextMeshProUGUI _fallbackButtonLabel;
         private static CharacterSheetTabs _currentTabs;
         private static object _setsButtonConfig;
         private static ManualLogSource _log;
+
+        private static readonly Color FallbackClear = new Color(0f, 0f, 0f, 0f);
+        private static readonly Color FallbackNormalText = new Color(0.70f, 0.67f, 0.64f, 1f);
+        private static readonly Color FallbackSelectedText = new Color(0.90f, 0.82f, 0.55f, 1f);
 
         public static bool SuppressInput { get; set; }
 
@@ -112,9 +121,13 @@ namespace GearSetsMod.Patches
                 var toggleMethod = typeof(CharacterSheetUI).GetMethod("ToggleCharacterSheet", BindingFlags.Static | BindingFlags.Public, null, Type.EmptyTypes, null);
                 if (toggleMethod != null)
                     _harmony.Patch(toggleMethod, prefix: new HarmonyMethod(typeof(GearSetsTabPatch).GetMethod(nameof(ToggleCharacterSheet_Prefix), BindingFlags.Static | BindingFlags.Public)));
-                var toggleOverload = typeof(CharacterSheetUI).GetMethod("ToggleCharacterSheet", BindingFlags.Static | BindingFlags.Public, null, new[] { typeof(CharacterSheetTabType), typeof(bool), typeof(CharacterSheetTabType[]) }, null);
-                if (toggleOverload != null)
+                foreach (var toggleOverload in typeof(CharacterSheetUI).GetMethods(BindingFlags.Static | BindingFlags.Public))
+                {
+                    if (toggleOverload.Name != "ToggleCharacterSheet" || toggleOverload.GetParameters().Length == 0)
+                        continue;
+
                     _harmony.Patch(toggleOverload, prefix: new HarmonyMethod(typeof(GearSetsTabPatch).GetMethod(nameof(ToggleCharacterSheet_Prefix), BindingFlags.Static | BindingFlags.Public)));
+                }
 
                 _initialized = true;
                 _log.LogInfo("[GearSets] Tab type registered successfully!");
@@ -158,10 +171,12 @@ namespace GearSetsMod.Patches
                 if (tabBtnComp == null) return;
 
                 ConfigureTabType(tabBtnComp);
-                _setsButtonInstance.transform.SetAsLastSibling();
+                PlaceButtonInHeader(tabBtnComp, buttons);
                 InitializeButtonLabel(tabBtnComp);
                 WireClickHandler(tabBtnComp, sheetTabs);
                 AppendToButtonsArray(tabBtnComp, buttons, buttonsField, sheetTabs);
+                RebuildHeaderLayout(tabBtnComp);
+                HideFallbackButton();
 
                 _log.LogInfo("[GearSets] Tab button injected successfully!");
             }
@@ -185,7 +200,14 @@ namespace GearSetsMod.Patches
                 var btn = buttons.GetValue(i);
                 if (btn != null && ((Component)btn).gameObject.name == "SetsTabButton")
                 {
+                    var comp = ((Component)btn).GetComponent<VCCharacterSheetTabButton>();
                     ((Component)btn).gameObject.SetActive(true);
+                    if (comp != null)
+                    {
+                        PlaceButtonInHeader(comp, buttons);
+                        RebuildHeaderLayout(comp);
+                    }
+                    HideFallbackButton();
                     return true;
                 }
             }
@@ -196,7 +218,10 @@ namespace GearSetsMod.Patches
                 var comp = _setsButtonInstance.GetComponent<VCCharacterSheetTabButton>();
                 if (comp != null)
                 {
+                    PlaceButtonInHeader(comp, buttons);
                     AppendToButtonsArray(comp, buttons, buttonsField, sheetTabs);
+                    RebuildHeaderLayout(comp);
+                    HideFallbackButton();
                     return true;
                 }
                 _setsButtonInstance = null;
@@ -211,11 +236,15 @@ namespace GearSetsMod.Patches
         /// </summary>
         private static VCCharacterSheetTabButton CloneTemplateButton(Array buttons)
         {
-            var template = buttons.GetValue(buttons.Length - 1);
+            var template = FindButtonComponent(buttons, CharacterSheetTabType.Journal)
+                ?? FindButtonComponent(buttons, CharacterSheetTabType.Quests)
+                ?? FindButtonComponent(buttons, CharacterSheetTabType.Map)
+                ?? FindLastButtonComponent(buttons);
             if (template == null) { _log.LogError("[GearSets] Template button null!"); return null; }
 
-            _setsButtonInstance = UnityEngine.Object.Instantiate(((Component)template).gameObject, ((Component)template).transform.parent);
+            _setsButtonInstance = UnityEngine.Object.Instantiate(template.gameObject, template.transform.parent);
             _setsButtonInstance.name = "SetsTabButton";
+            _log.LogInfo($"[GearSets] Cloned tab button template from {template.gameObject.name}.");
 
             var tabBtnComp = _setsButtonInstance.GetComponent<VCCharacterSheetTabButton>();
             if (tabBtnComp == null)
@@ -226,6 +255,378 @@ namespace GearSetsMod.Patches
             }
 
             return tabBtnComp;
+        }
+
+        private static void EnsureFallbackButton(CharacterSheetUI sheet, Array buttons)
+        {
+            if (sheet?.TabButtonsHost == null)
+                return;
+
+            _currentTabs = sheet.TabsController as CharacterSheetTabs ?? _currentTabs;
+
+            if (_fallbackButtonInstance != null)
+            {
+                _fallbackButtonInstance.SetActive(true);
+                StyleAndPlaceFallbackButton(sheet, buttons);
+                RebuildFallbackLayout();
+                return;
+            }
+
+            var buttonObj = new GameObject("SetsFallbackButton", typeof(RectTransform));
+            buttonObj.transform.SetParent(sheet.TabButtonsHost, false);
+            _fallbackButtonInstance = buttonObj;
+
+            var rect = buttonObj.GetComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.sizeDelta = new Vector2(132f, 54f);
+
+            var layout = buttonObj.AddComponent<LayoutElement>();
+            layout.ignoreLayout = true;
+
+            _fallbackButtonImage = buttonObj.AddComponent<Image>();
+            _fallbackButtonImage.color = FallbackClear;
+
+            var button = buttonObj.AddComponent<Button>();
+            var colors = button.colors;
+            colors.normalColor = FallbackClear;
+            colors.highlightedColor = new Color(1f, 1f, 1f, 0.08f);
+            colors.pressedColor = new Color(1f, 1f, 1f, 0.12f);
+            colors.selectedColor = FallbackClear;
+            colors.disabledColor = FallbackClear;
+            button.colors = colors;
+            button.onClick.AddListener(OnSetsButtonClicked);
+
+            var labelObj = new GameObject("Label", typeof(RectTransform));
+            labelObj.transform.SetParent(buttonObj.transform, false);
+            var labelRect = labelObj.GetComponent<RectTransform>();
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+
+            _fallbackButtonLabel = labelObj.AddComponent<TextMeshProUGUI>();
+            _fallbackButtonLabel.text = "SETS";
+            _fallbackButtonLabel.fontSize = 28f;
+            _fallbackButtonLabel.fontStyle = FontStyles.Bold;
+            _fallbackButtonLabel.alignment = TextAlignmentOptions.Center;
+            _fallbackButtonLabel.color = FallbackSelectedText;
+            _fallbackButtonLabel.raycastTarget = false;
+
+            StyleAndPlaceFallbackButton(sheet, buttons);
+            RebuildFallbackLayout();
+            _log.LogInfo($"[GearSets] Fallback button created under {GetTransformPath(sheet.TabButtonsHost)} with {sheet.TabButtonsHost.childCount} tab host children.");
+        }
+
+        private static void StyleAndPlaceFallbackButton(CharacterSheetUI sheet, Array buttons)
+        {
+            if (_fallbackButtonInstance == null || sheet?.TabButtonsHost == null)
+                return;
+
+            var source = FindButtonComponent(buttons, CharacterSheetTabType.Journal)
+                ?? FindButtonComponent(buttons, CharacterSheetTabType.Quests)
+                ?? FindLastButtonComponent(buttons);
+            if (source == null)
+                return;
+
+            if (_fallbackButtonInstance.transform.parent != source.transform.parent)
+                _fallbackButtonInstance.transform.SetParent(source.transform.parent, false);
+
+            CopyNativeTextStyle(source);
+            PlaceFallbackAfterSource(buttons, source);
+            _fallbackButtonInstance.transform.SetAsLastSibling();
+        }
+
+        private static void RebuildFallbackLayout()
+        {
+            var parent = _fallbackButtonInstance?.transform.parent as RectTransform;
+            while (parent != null)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(parent);
+                parent = parent.parent as RectTransform;
+            }
+        }
+
+        private static void HideFallbackButton()
+        {
+            if (_fallbackButtonInstance != null)
+                _fallbackButtonInstance.SetActive(false);
+        }
+
+        private static Component FindButtonComponent(Array buttons, CharacterSheetTabType tabType)
+        {
+            foreach (var button in buttons)
+            {
+                if (button is not Component component)
+                    continue;
+
+                try
+                {
+                    var typeProp = button.GetType().GetProperty("Type", BindingFlags.Instance | BindingFlags.Public);
+                    if (typeProp?.GetValue(button) == tabType)
+                        return component;
+                }
+                catch
+                {
+                }
+            }
+
+            return null;
+        }
+
+        private static Component FindLastButtonComponent(Array buttons)
+        {
+            for (var i = buttons.Length - 1; i >= 0; i--)
+            {
+                if (buttons.GetValue(i) is Component component)
+                    return component;
+            }
+
+            return null;
+        }
+
+        private static void CopyNativeTextStyle(Component source)
+        {
+            if (_fallbackButtonLabel == null)
+                return;
+
+            var sourceLabel = source.GetComponentInChildren<TextMeshProUGUI>(true);
+            if (sourceLabel == null)
+                return;
+
+            _fallbackButtonLabel.font = sourceLabel.font;
+            _fallbackButtonLabel.fontSharedMaterial = sourceLabel.fontSharedMaterial;
+            _fallbackButtonLabel.fontSize = sourceLabel.fontSize;
+            _fallbackButtonLabel.fontStyle = sourceLabel.fontStyle;
+            _fallbackButtonLabel.characterSpacing = sourceLabel.characterSpacing;
+            _fallbackButtonLabel.wordSpacing = sourceLabel.wordSpacing;
+            _fallbackButtonLabel.lineSpacing = sourceLabel.lineSpacing;
+            _fallbackButtonLabel.enableAutoSizing = sourceLabel.enableAutoSizing;
+            _fallbackButtonLabel.fontSizeMin = sourceLabel.fontSizeMin;
+            _fallbackButtonLabel.fontSizeMax = sourceLabel.fontSizeMax;
+            _fallbackButtonLabel.color = FallbackSelectedText;
+        }
+
+        private static void PlaceFallbackAfterSource(Array buttons, Component source)
+        {
+            var sourceLabel = source.GetComponentInChildren<TextMeshProUGUI>(true);
+            var sourceRect = source.transform as RectTransform;
+            var fallbackRect = _fallbackButtonInstance?.transform as RectTransform;
+            if (sourceRect == null || fallbackRect == null)
+                return;
+
+            fallbackRect.anchorMin = sourceRect.anchorMin;
+            fallbackRect.anchorMax = sourceRect.anchorMax;
+            fallbackRect.pivot = sourceRect.pivot;
+            fallbackRect.sizeDelta = sourceRect.sizeDelta;
+            fallbackRect.localScale = sourceRect.localScale;
+            fallbackRect.localRotation = sourceRect.localRotation;
+
+            var spacing = GetNativeTabSpacing(buttons);
+            fallbackRect.anchoredPosition = sourceRect.anchoredPosition + new Vector2(spacing, 0f);
+
+            if (_fallbackButtonLabel != null && sourceLabel != null)
+                CopyNativeLabelRect(sourceLabel.rectTransform, _fallbackButtonLabel.rectTransform);
+        }
+
+        private static void CopyNativeLabelRect(RectTransform source, RectTransform target)
+        {
+            target.anchorMin = source.anchorMin;
+            target.anchorMax = source.anchorMax;
+            target.pivot = source.pivot;
+            target.anchoredPosition = source.anchoredPosition;
+            target.sizeDelta = source.sizeDelta;
+            target.localScale = source.localScale;
+            target.localRotation = source.localRotation;
+        }
+
+        private static float GetNativeTabSpacing(Array buttons)
+        {
+            var quests = FindButtonComponent(buttons, CharacterSheetTabType.Quests);
+            var journal = FindButtonComponent(buttons, CharacterSheetTabType.Journal);
+            if (TryGetLabelCenterX(quests, out var questX) && TryGetLabelCenterX(journal, out var journalX))
+            {
+                var spacing = journalX - questX;
+                if (Mathf.Abs(spacing) > 10f)
+                    return spacing;
+            }
+
+            var map = FindButtonComponent(buttons, CharacterSheetTabType.Map);
+            if (TryGetLabelCenterX(map, out var mapX) && TryGetLabelCenterX(quests, out questX))
+            {
+                var spacing = questX - mapX;
+                if (Mathf.Abs(spacing) > 10f)
+                    return spacing;
+            }
+
+            return 170f;
+        }
+
+        private static bool TryGetLabelCenterX(Component button, out float centerX)
+        {
+            centerX = 0f;
+            if (button == null || _fallbackButtonInstance == null)
+                return false;
+
+            var hostRect = _fallbackButtonInstance.transform.parent as RectTransform;
+            var label = button.GetComponentInChildren<TextMeshProUGUI>(true);
+            if (hostRect == null || label == null)
+                return false;
+
+            var corners = new Vector3[4];
+            label.rectTransform.GetWorldCorners(corners);
+            var left = hostRect.InverseTransformPoint(corners[0]);
+            var right = hostRect.InverseTransformPoint(corners[2]);
+            centerX = (left.x + right.x) * 0.5f;
+            return true;
+        }
+
+        private static string GetTransformPath(Transform transform)
+        {
+            if (transform == null)
+                return "<null>";
+
+            var path = transform.name;
+            while (transform.parent != null)
+            {
+                transform = transform.parent;
+                path = transform.name + "/" + path;
+            }
+
+            return path;
+        }
+
+        private static void PlaceButtonInHeader(VCCharacterSheetTabButton tabBtnComp, Array buttons)
+        {
+            var buttonTransform = ((Component)tabBtnComp).transform;
+            var buttonObject = ((Component)tabBtnComp).gameObject;
+            var layoutElement = buttonObject.GetComponent<LayoutElement>() ?? buttonObject.AddComponent<LayoutElement>();
+            layoutElement.ignoreLayout = true;
+
+            var source = FindButtonComponent(buttons, CharacterSheetTabType.Journal)
+                ?? FindButtonComponent(buttons, CharacterSheetTabType.Quests)
+                ?? FindLastButtonComponent(buttons);
+            if (source == null)
+            {
+                buttonTransform.SetAsLastSibling();
+                return;
+            }
+
+            if (buttonTransform.parent != source.transform.parent)
+                buttonTransform.SetParent(source.transform.parent, false);
+
+            var buttonRect = buttonTransform as RectTransform;
+            var sourceRect = source.transform as RectTransform;
+            if (buttonRect != null && sourceRect != null)
+            {
+                buttonRect.anchorMin = sourceRect.anchorMin;
+                buttonRect.anchorMax = sourceRect.anchorMax;
+                buttonRect.pivot = sourceRect.pivot;
+                buttonRect.sizeDelta = sourceRect.sizeDelta;
+                buttonRect.localScale = sourceRect.localScale;
+                buttonRect.localRotation = sourceRect.localRotation;
+            }
+
+            var previous = FindButtonComponent(buttons, CharacterSheetTabType.Quests)
+                ?? FindButtonComponent(buttons, CharacterSheetTabType.Map);
+            var positioner = buttonObject.GetComponent<NativeTabPositioner>() ?? buttonObject.AddComponent<NativeTabPositioner>();
+            positioner.Initialize(buttonRect, source.transform as RectTransform, previous?.transform as RectTransform);
+            buttonTransform.SetAsLastSibling();
+        }
+
+        private static int FindSiblingIndexAfterTab(Array buttons, CharacterSheetTabType tabType)
+        {
+            foreach (var button in buttons)
+            {
+                if (button is not Component component)
+                    continue;
+
+                try
+                {
+                    var typeProp = button.GetType().GetProperty("Type", BindingFlags.Instance | BindingFlags.Public);
+                    if (typeProp?.GetValue(button) == tabType)
+                        return component.transform.GetSiblingIndex() + 1;
+                }
+                catch
+                {
+                    // Some cloned third-party buttons can be partially initialized during sheet construction.
+                }
+            }
+
+            return -1;
+        }
+
+        private class NativeTabPositioner : MonoBehaviour
+        {
+            private RectTransform _target;
+            private RectTransform _source;
+            private RectTransform _previous;
+            private int _framesRemaining;
+
+            public void Initialize(RectTransform target, RectTransform source, RectTransform previous)
+            {
+                _target = target;
+                _source = source;
+                _previous = previous;
+                _framesRemaining = 90;
+                Apply();
+            }
+
+            private void LateUpdate()
+            {
+                if (_framesRemaining <= 0)
+                {
+                    enabled = false;
+                    return;
+                }
+
+                _framesRemaining--;
+                Apply();
+            }
+
+            private void Apply()
+            {
+                if (_target == null || _source == null)
+                    return;
+
+                if (_target.parent != _source.parent)
+                    _target.SetParent(_source.parent, false);
+
+                _target.anchorMin = _source.anchorMin;
+                _target.anchorMax = _source.anchorMax;
+                _target.pivot = _source.pivot;
+                _target.sizeDelta = _source.sizeDelta;
+                _target.localScale = _source.localScale;
+                _target.localRotation = _source.localRotation;
+
+                var spacing = GetWorldSpacing();
+                _target.position = _source.position + spacing;
+                _target.SetAsLastSibling();
+            }
+
+            private Vector3 GetWorldSpacing()
+            {
+                if (_previous != null)
+                {
+                    var spacing = _source.position - _previous.position;
+                    if (spacing.sqrMagnitude > 0.0001f)
+                        return spacing * 0.9f;
+                }
+
+                var width = _source.rect.width * Mathf.Abs(_source.lossyScale.x);
+                return _source.right * Mathf.Max(width * 1.30f, 126f);
+            }
+        }
+
+        private static void RebuildHeaderLayout(VCCharacterSheetTabButton tabBtnComp)
+        {
+            var parent = ((Component)tabBtnComp).transform.parent as RectTransform;
+            while (parent != null)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(parent);
+                parent = parent.parent as RectTransform;
+            }
         }
 
         /// <summary>
@@ -318,6 +719,11 @@ namespace GearSetsMod.Patches
 
         private static void UpdateButtonSelection(bool selected)
         {
+            if (_fallbackButtonImage != null)
+                _fallbackButtonImage.color = FallbackClear;
+            if (_fallbackButtonLabel != null)
+                _fallbackButtonLabel.color = selected ? FallbackSelectedText : FallbackNormalText;
+
             if (_setsButtonConfig == null) return;
             try { _setsButtonConfig.GetType().GetMethod("SetSelection", BindingFlags.Instance | BindingFlags.Public)?.Invoke(_setsButtonConfig, new object[] { selected }); }
             catch (Exception ex) { _log?.LogWarning($"[GearSets] Button selection error: {ex.Message}"); }

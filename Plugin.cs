@@ -11,7 +11,7 @@ namespace GearSetsMod
     {
         internal const string PluginId = "com.gearsets.taintedgrail";
         internal const string PluginName = "Gear & Skill Sets";
-        internal const string PluginVersion = "2.2.0";
+        internal const string PluginVersion = "2.2.1";
 
         private void Awake()
         {
